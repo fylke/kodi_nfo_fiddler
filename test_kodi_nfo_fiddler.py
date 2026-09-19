@@ -73,6 +73,24 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["audio_channels"], "Unknown Channels")
 
     @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+
+        video_path = os.path.join(self.test_dir, "inception.mp4")
+        txt_path = os.path.join(self.test_dir, "notes.TXT")
+        jpg_path = os.path.join(self.test_dir, "poster.JPG")
+        keep_path = os.path.join(self.test_dir, "keep.png")
+        for path in (video_path, txt_path, jpg_path, keep_path):
+            with open(path, "w") as file:
+                file.write("test")
+
+        process_directory(self.test_dir, is_root=True)
+
+        self.assertFalse(os.path.exists(txt_path))
+        self.assertFalse(os.path.exists(jpg_path))
+        self.assertTrue(os.path.exists(keep_path))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_single_file_renames_parent_folder(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")

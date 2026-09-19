@@ -24,6 +24,7 @@ TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
+REMOVE_EXTENSIONS = ('.txt', '.jpg')
 
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
@@ -254,6 +255,16 @@ def get_video_files(directory):
     except Exception:
         return []
 
+def remove_unwanted_files(directory):
+    """Removes TXT and JPG files from the given directory (non-recursive)."""
+    try:
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            if filename.lower().endswith(REMOVE_EXTENSIONS) and os.path.isfile(file_path):
+                os.remove(file_path)
+    except Exception:
+        pass
+
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
     sanitized = re.sub(r'[^\w\s\(\)\.,-]', '', name)
@@ -276,6 +287,7 @@ def write_metadata_file(path, url, title, year, metadata, original_filename):
 
 def process_directory(directory_path, is_root=False):
     directory_path = os.path.abspath(directory_path)
+    remove_unwanted_files(directory_path)
     video_files = get_video_files(directory_path)
     if not video_files:
         return None
@@ -320,7 +332,7 @@ def process_directory(directory_path, is_root=False):
         metadata_suffix = sanitize_folder_name(
             f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
         )
-        new_name = f"{target_title}_({target_year})_{metadata_suffix}"
+        new_name = f"{target_title.replace(" ", "_")}_({target_year})_{metadata_suffix}"
 
         # Determine target layout based on folder context tier
         if is_root:
