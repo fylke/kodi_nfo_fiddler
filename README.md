@@ -32,20 +32,6 @@ Process a specific directory:
 python3 kodi_nfo_fiddler.py /path/to/movies
 ```
 
-## Run tests
-
-Run the full unittest suite from the project root:
-
-```bash
-python3 -m unittest -v
-```
-
-Run the test module directly:
-
-```bash
-python3 -m unittest -v test_kodi_nfo_fiddler.py
-```
-
 ## Dev container
 
 Open the repository in VS Code and choose **Reopen in Container**. Once the container is created, run the tests in its terminal with:
