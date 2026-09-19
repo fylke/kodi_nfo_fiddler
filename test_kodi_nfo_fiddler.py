@@ -103,5 +103,39 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertTrue(os.path.exists(expected_video_file))
         self.assertTrue(os.path.exists(expected_nfo_file))
 
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
+        """Verify that a widescreen 1920x802 file correctly maps to 1080p."""
+        mock_stdout = json.dumps({
+            "tracks": [
+                {
+                    "type": "video",
+                    "properties": {
+                        "display_dimensions": "1920x802"
+                    }
+                },
+                {
+                    "type": "audio",
+                    "codec": "A_DTS",
+                    "properties": {
+                        "audio_channels": 6
+                    }
+                }
+            ]
+        })
+
+        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["resolution"], "1080p")
+
+    def test_parse_filename_with_heavy_metadata(self):
+        filename = "Toy Story (1995) (1080p DS4K BluRay x265 10-bit HDR AAC 7.1).mkv"
+        metadata = parse_filename(filename, "dummy_path.mkv")
+
+        self.assertEqual(metadata["title"], "Toy Story")
+        self.assertEqual(metadata["year"], "1995")
+        
 if __name__ == '__main__':
     unittest.main()

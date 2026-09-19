@@ -1,148 +1,411 @@
-import os
-import re
-import requests
-from dotenv import load_load_env  # Import dotenv
+# /// script
+# dependencies = [
+#     "requests",
+#     "python-dotenv",
+# ]
+# ///
 
-# Load environment variables from the .env file
+import os
+import sys
+import re
+import shutil
+import json
+import subprocess
+import requests
+from dotenv import load_dotenv
+
+# Load environment variables from .env
 load_dotenv()
 
 # --- CONFIGURATION ---
-# It will look for "TMDB_API_KEY" in your environment/system.
-# If not found, it defaults to None.
-TMDB_API_KEY = os.getenv("TMDB_API_KEY")
-TARGET_DIR = "."
-# ---------------------
-
-# Keep the rest of your script exactly the same, but add a quick safety check:
-if not TMDB_API_KEY:
-    print("Error: TMDB_API_KEY not found. Please ensure it is set in your .env file.")
-    exit(1)
+TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
 # ---------------------
 
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
-
-# Supported media extensions to filter out non-video files
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 
-def parse_filename(filename):
-    """
-    Parses a typical movie filename to extract metadata.
-    Example: "The.Matrix.1999.1080p.BluRay.x264.DTS-5.1.mkv"
-    """
-    # Remove extension
-    name, _ = os.path.splitext(filename)
-    # Replace dots, dashes, and underscores with spaces for cleaner regex parsing
-    clean_name = re.sub(r'[\._\-]', ' ', name)
-    
-    # Common regex patterns for extraction
-    year_match = re.search(r'\b(19|20)\d{2}\b', clean_name)
-    resolution_match = re.search(r'\b(480p|720p|1080p|2160p|4k)\b', clean_name, re.IGNORECASE)
-    source_match = re.search(r'\b(BluRay|BRRip|BDRip|WEBRip|WEB-DL|HDRip|DVDRip|HDTV)\b', clean_name, re.IGNORECASE)
-    
-    # Audio Codec patterns (DTS, AAC, AC3, EAC3, TrueHD, FLAC, DD+, etc.)
-    audio_codec_match = re.search(r'\b(DTS-HD|DTS|AAC|AC3|EAC3|TrueHD|FLAC|DD\+|DD|Atmos)\b', clean_name, re.IGNORECASE)
-    
-    # Audio Channels (e.g., 7.1, 5.1, 2.0)
-    audio_channels_match = re.search(r'\b([257]\.[01])\b', clean_name)
+def get_mkv_metadata(filepath):
+    """Attempts to read MKV technical metadata using mkvmerge -J."""
+    try:
+        result = subprocess.run(
+            ["mkvmerge", "-J", filepath],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        data = json.loads(result.stdout)
 
-    # Extract Title: Everything before the year, or before the resolution if no year exists
-    title = clean_name
-    split_points = [m.start() for m in [year_match, resolution_match, source_match] if m]
-    if split_points:
-        title = clean_name[:min(split_points)].strip()
-    else:
-        # Fallback: just clean up excessive spacing
-        title = ' '.join(title.split())
+        resolution = "Unknown Resolution"
+        audio_codec = "Unknown Codec"
+        audio_channels = "Unknown Channels"
 
-    return {
-        "title": title,
-        "year": year_match.group(0) if year_match else None,
-        "resolution": resolution_match.group(0) if resolution_match else "Unknown Resolution",
-        "source": source_match.group(0) if source_match else "Unknown Source",
-        "audio_codec": audio_codec_match.group(0) if audio_codec_match else "Unknown Codec",
-        "audio_channels": audio_channels_match.group(0) if audio_channels_match else "Unknown Channels"
+        tracks = data.get("tracks", [])
+        for track in tracks:
+            track_type = track.get("type")
+            properties = track.get("properties", {})
+
+            # Extract Video Info (Direct integer targeting for reliability)
+            if track_type == "video" and resolution == "Unknown Resolution":
+                # 1. Grab raw integer properties first if available
+                display_width = properties.get("pixel_width") or properties.get("display_width")
+                display_height = properties.get("pixel_height") or properties.get("display_height")
+
+                # 2. Fallback to string splitting ONLY if integers aren't present
+                if not display_width or not display_height:
+                    dimensions = properties.get("display_dimensions") or properties.get("pixel_dimensions")
+                    if dimensions and 'x' in dimensions:
+                        try:
+                            w_str, h_str = dimensions.split('x')
+                            display_width = int(w_str)
+                            display_height = int(h_str)
+                        except ValueError:
+                            pass
+
+                # 3. Perform safety check. If we successfully found numbers, execute bucketing logic
+                if display_width and display_height:
+                    display_width = int(display_width)
+                    display_height = int(display_height)
+
+                    if display_width >= 3840 or display_height >= 2160:
+                        resolution = "2160p"
+                    elif display_width >= 1920 or display_height >= 1080:
+                        resolution = "1080p"
+                    elif display_width >= 1280 or display_height >= 720:
+                        resolution = "720p"
+                    elif display_width >= 720 or display_height >= 480:
+                        resolution = "480p"
+                    else:
+                        resolution = f"{display_height}p"
+
+            # Extract Audio Info (Codec & Channels)
+            elif track_type == "audio" and audio_codec == "Unknown Codec":
+                codec_id = track.get("codec", "").upper()
+
+                if "DTS-HD" in codec_id:
+                    audio_codec = "DTS-HD"
+                elif "DTS" in codec_id:
+                    audio_codec = "DTS"
+                elif "TRUEHD" in codec_id or "ATMOS" in codec_id:
+                    audio_codec = "TrueHD"
+                elif "EAC3" in codec_id or "E-AC-3" in codec_id:
+                    audio_codec = "E-AC3"
+                elif "AC3" in codec_id or "AC-3" in codec_id:
+                    audio_codec = "AC3"
+                elif "AAC" in codec_id:
+                    audio_codec = "AAC"
+                elif "OPUS" in codec_id:
+                    audio_codec = "Opus"
+                elif "FLAC" in codec_id:
+                    audio_codec = "FLAC"
+                else:
+                    audio_codec = codec_id.replace("A_", "")
+
+                channels = properties.get("audio_channels")
+                if channels:
+                    if channels == 8:
+                        audio_channels = "7.1"
+                    elif channels == 6:
+                        audio_channels = "5.1"
+                    elif channels == 2:
+                        audio_channels = "2.0"
+                    elif channels == 1:
+                        audio_channels = "1.0"
+                    else:
+                        audio_channels = f"{channels}.0"
+
+        return {
+            "resolution": resolution,
+            "audio_codec": audio_codec,
+            "audio_channels": audio_channels
+        }
+
+    except Exception:
+        return None
+
+def search_tmdb(title, year):
+    """
+    Searches TMDB for a movie title. If a strict year search fails,
+    it falls back to a broad text search to match web behavior.
+    """
+    API_KEY = "your_tmdb_api_key_here"
+    BASE_URL = "https://api.themoviedb.org/3/search/movie"
+
+    headers = {
+        "Authorization": f"Bearer {TMDB_READ_TOKEN}",
+        "accept": "application/json"
     }
 
-def search_tmdb(title, year=None):
-    """
-    Searches TMDB for a movie. Returns the TMDB movie URL if an unequivocal hit is found.
-    """
+    # Tier 1: Strict API Search (Title + Exact Year Filter)
     params = {
-        "api_key": TMDB_API_KEY,
+        "api_key": API_KEY,
         "query": title,
+        "year": year,
+        "include_adult": "false",
+        "language": "en-US",
+        "page": 1
     }
-    if year:
+
+    if year and year != "Unknown Year":
         params["primary_release_year"] = year
 
     try:
-        response = requests.get(TMDB_SEARCH_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
-        results = data.get("results", [])
+        response = requests.get(TMDB_SEARCH_URL, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
 
-        # Define "unequivocal hit": 
-        # Either there is exactly 1 result, OR the first result is a very high popularity/exact match.
-        if len(results) == 1:
-            movie = results[0]
-            return f"{TMDB_MOVIE_BASE_URL}{movie['id']}", movie['title'], movie.get('release_date', '0000-00-00')[:4]
-        elif len(results) > 1:
-            # Check if the top result's title is an exact match (case-insensitive) to be sure
-            first_match = results[0]
-            if first_match['title'].lower() == title.lower():
-                return f"{TMDB_MOVIE_BASE_URL}{first_match['id']}", first_match['title'], first_match.get('release_date', '0000-00-00')[:4]
-            
-        return None, None, None
+            # If Tier 1 found matches, return the top hit
+            if results:
+                hit = results[0]
+                tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
+                return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
+
+        # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
+        if year and year != "Unknown Year":
+            print(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
+            params.pop("year", None)  # Remove the strict year lock
+
+            response = requests.get(BASE_URL, headers=headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("results", [])
+
+                # Scan results manually to find a close match within a 1-year variance window
+                for hit in results:
+                    release_date = hit.get("release_date", "")
+                    if release_date:
+                        hit_year = int(release_date[:4])
+                        target_year = int(year)
+
+                        # Allow a +/- 1 year tolerance window for international premieres
+                        if abs(hit_year - target_year) <= 1:
+                            tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
+                            return tmdb_url, hit["title"], str(hit_year)
+
+                # Final ultimate safety: if no year is close but it's the only hit, take it
+                if results:
+                    hit = results[0]
+                    tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
+                    return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
+
     except Exception as e:
-        print(f"Error searching TMDB for '{title}': {e}")
-        return None, None, None
+        print(f"[-] Network error querying TMDB: {e}")
+
+    return None
+
+def parse_filename(filename, file_path):
+    """
+    Cleans up complex release group filenames to extract a pristine
+    Title and Year for TMDB API optimization.
+    """
+    # Technical metadata defaults (Will be overwritten if it's an MKV)
+    metadata = {
+        "title": "Unknown Title",
+        "year": "Unknown Year",
+        "resolution": "Unknown Resolution",
+        "source": "Unknown Source",
+        "audio_codec": "Unknown Codec",
+        "audio_channels": "Unknown Channels"
+    }
+
+    # Strip extension
+    base_name, _ = os.path.splitext(filename)
+
+    # Replace common separators with spaces to standardize tokenization
+    clean_name = base_name.replace('_', ' ').replace('.', ' ')
+
+    # Extract Year: Look for a 4-digit number starting with 19 or 20 enclosed or separated cleanly
+    year_match = re.search(r'\b(19\d{2}|2\d{3})\b', clean_name)
+
+    if year_match:
+        metadata["year"] = year_match.group(1)
+        # The title is everything before the year
+        title_part = clean_name[:year_match.start()]
+    else:
+        # Fallback if no year is found: try to cut off at common tag indicators
+        title_part = re.split(r'\b(1080p|720p|2160p|480p|BluRay|WEB|DVD)\b', clean_name, flags=re.IGNORECASE)[0]
+
+    # Clean up the extracted title string
+    title_part = re.sub(r'[\(\)\[\]\-\+]', ' ', title_part) # Strip parentheses/brackets
+    title_part = re.sub(r'\s+', ' ', title_part).strip()     # Normalize spaces
+    metadata["title"] = title_part
+
+    # Deduce Source out of raw string before returning (fallback for non-MKVs)
+    source_keywords = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
+    for src in source_keywords:
+        if re.search(r'\b' + re.escape(src) + r'\b', clean_name, re.IGNORECASE):
+            metadata["source"] = src
+            break
+
+    # If the file is an MKV, populate pristine technical parameters directly from the tracks
+    if filename.lower().endswith('.mkv'):
+        mkv_meta = get_mkv_metadata(file_path)
+        if mkv_meta:
+            metadata.update(mkv_meta)
+
+    return metadata
+
+def get_video_files(directory):
+    """Returns a list of video files in the given directory (non-recursive)."""
+    try:
+        return [f for f in os.listdir(directory) if f.lower().endswith(MEDIA_EXTENSIONS) and os.path.isfile(os.path.join(directory, f))]
+    except Exception:
+        return []
+
+def sanitize_folder_name(name):
+    """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
+    sanitized = re.sub(r'[^\w\s\(\)\.,-]', '', name)
+    return sanitized.replace(" ", "_")
+
+def write_metadata_file(path, url, title, year, metadata, original_filename):
+    """Helper to write the movie details to an NFO file (with empty rows before formatting)."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{url}\n\n")
+            f.write(f"Title: {title}\n")
+            f.write(f"Year: {year}\n")
+            f.write(f"Resolution: {metadata['resolution']}\n")
+            f.write(f"Source: {metadata['source']}\n")
+            f.write(f"Audio Codec: {metadata['audio_codec']}\n")
+            f.write(f"Audio Channels: {metadata['audio_channels']}\n\n")
+            f.write(f"Original Filename: {original_filename}\n")
+    except Exception as e:
+        print(f" -> Failed writing metadata file: {e}")
+
+def process_directory(directory_path, is_root=True):
+    directory_path = os.path.abspath(directory_path)
+    video_files = get_video_files(directory_path)
+    if not video_files:
+        return None
+
+    num_videos = len(video_files)
+    print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {num_videos} video file(s))")
+
+    for filename in video_files:
+        # Keep track of the untouched original filename
+        original_filename = filename
+        file_path = os.path.join(directory_path, filename)
+        _, ext = os.path.splitext(filename)
+        print(f" -> Processing file: {filename}")
+
+        # Clean up filename metadata
+        metadata = parse_filename(filename, file_path)
+
+        # 1. Safely call the TMDB search
+        search_result = search_tmdb(metadata['title'], metadata['year'])
+
+        # Initialize flags, folder target names, and pure file title tracks
+        is_hit = True
+        file_title = metadata['title']
+        target_year = metadata['year']
+        tmdb_url = ""
+
+        # 2. The No-Hit Fallback Switch
+        if search_result is None:
+            print(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
+            is_hit = False
+            # Folder title gets the prefix flag
+            target_title = f"no_hit_{metadata['title']}"
+        else:
+            # Safe to unpack if it's a valid hit
+            tmdb_url, matched_title, release_year = search_result
+            # Normalize target names to official TMDB naming conventions
+            target_title = matched_title
+            file_title = matched_title
+            target_year = release_year
+
+        # 3. Construct the clean destination directory name (With no_hit_ prefix if applicable)
+        metadata_suffix = f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
+        new_name = f"{target_title}_({target_year})_{metadata_suffix}"
+
+        # Determine target layout based on folder context tier
+        if is_root:
+            # Create a brand new folder inside the landing directory root
+            dest_dir = os.path.join(directory_path, new_name)
+            os.makedirs(dest_dir, exist_ok=True)
+        else:
+            # Keep operations local to the current working subdirectory
+            dest_dir = directory_path
+
+        new_file_name = f"{new_name}{ext}"
+        new_file_path = os.path.join(dest_dir, new_file_name)
+
+        # 4. Move/Rename the movie asset file into position
+        print(f"[+] Setting asset to: {new_file_path}")
+        os.rename(file_path, new_file_path)
+
+        # 5. Generate the .nfo file sidecar matching the filename pattern
+        nfo_file_name = f"{new_name}.nfo"
+        nfo_file_path = os.path.join(dest_dir, nfo_file_name)
+
+        with open(nfo_file_path, 'w', encoding='utf-8') as nfo:
+            nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
+            nfo.write("<movie>\n")
+            nfo.write(f"    <!-- Original Filename: {original_filename} -->\n")
+            nfo.write(f"    <title>{metadata['title']}</title>\n")
+            nfo.write(f"    <year>{metadata['year']}</year>\n")
+
+            if is_hit:
+                nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_url.split('/')[-1]}</uniqueid>\n")
+                nfo.write(f"    <kodi_nfo_url>{tmdb_url}</kodi_nfo_url>\n")
+            else:
+                nfo.write("    <kodi_nfo_url></kodi_nfo_url>\n")
+
+            nfo.write("</movie>\n")
+
+        # 7. Final Step: Rename the directory itself if it's an existing subdir
+        if not is_root:
+            parent_dir = os.path.dirname(directory_path)
+            final_subdir_path = os.path.join(parent_dir, new_dir_name)
+
+            # Guard against overwriting if name is already perfectly normalized
+            if directory_path != final_subdir_path:
+                print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_dir_name}'")
+                try:
+                    os.rename(directory_path, final_subdir_path)
+                    # Break out early since the tracking directory path just moved locations
+                    break
+                except Exception as e:
+                    print(f"[-] Directory rename failed: {e}")
+
+    return None
 
 def main():
-    if TMDB_API_KEY == "YOUR_TMDB_API_KEY_HERE":
-        print("Please configure your TMDB API Key in the script before running.")
-        return
+    if not TMDB_READ_TOKEN:
+        print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
+        sys.exit(1)
 
-    print(f"Scanning directory: {os.path.abspath(TARGET_DIR)}")
-    
-    for filename in os.listdir(TARGET_DIR):
-        # Scan only media files
-        if not filename.lower().endswith(MEDIA_EXTENSIONS):
-            continue
-            
-        print(f"\nProcessing file: {filename}")
-        metadata = parse_filename(filename)
-        
-        print(f" -> Parsed: '{metadata['title']}' | Year: {metadata['year']}")
-        
-        # Look up on TMDB
-        tmdb_url, matched_title, release_year = search_tmdb(metadata['title'], metadata['year'])
-        
-        if tmdb_url:
-            print(f" -> Found unequivocal TMDB match: {matched_title} ({release_year})")
-            
-            # Format the output text file name (replace spaces with underscores)
-            # Standardized name: Movie_Title_(Year).txt
-            output_filename = f"{matched_title}_{release_year}.txt"
-            output_filename = re.sub(r'[^\w\s\(\)\.-]', '', output_filename) # Strip illegal characters
-            output_filename = output_filename.replace(" ", "_")
-            
-            output_path = os.path.join(TARGET_DIR, output_filename)
-            
-            # Write metadata contents to file
-            try:
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(f"TMDB URL: {tmdb_url}\n")
-                    f.write(f"Title: {matched_title}\n")
-                    f.write(f"Year: {release_year}\n")
-                    f.write(f"Resolution: {metadata['resolution']}\n")
-                    f.write(f"Source: {metadata['source']}\n")
-                    f.write(f"Audio Codec: {metadata['audio_codec']}\n")
-                    f.write(f"Audio Channels: {metadata['audio_channels']}\n")
-                print(f" -> Successfully wrote details to: {output_filename}")
-            except Exception as e:
-                print(f" -> Failed writing to file {output_filename}: {e}")
-        else:
-            print(" -> No unequivocal hit found on TMDB. Skipping...")
+    if len(sys.argv) > 1:
+        target_dir = sys.argv[1]
+    else:
+        target_dir = "."
+
+    if not os.path.isdir(target_dir):
+        print(f"Error: The directory '{target_dir}' does not exist.")
+        sys.exit(1)
+
+    target_dir = os.path.abspath(target_dir)
+    print(f"Scanning directory: {target_dir}")
+
+    # 1. Snapshot the pre-existing subdirectories BEFORE processing loose files
+    try:
+        existing_subdirs = [
+            os.path.join(target_dir, d)
+            for d in os.listdir(target_dir)
+            if os.path.isdir(os.path.join(target_dir, d)) and not d.startswith('.')
+        ]
+    except Exception as e:
+        print(f"Error scanning initial subdirectories: {e}")
+        existing_subdirs = []
+
+    # 2. Process loose video files sitting directly in the root directory (Creates subdirs)
+    process_directory(target_dir, is_root=True)
+
+    # 3. Process nested files in existing subdirectories (Renames the subdirs)
+    for subdir in existing_subdirs:
+        process_directory(subdir, is_root=False)
 
 if __name__ == "__main__":
     main()
