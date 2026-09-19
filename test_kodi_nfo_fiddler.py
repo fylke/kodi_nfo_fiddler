@@ -91,7 +91,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         new_folder_path = process_directory(movie_folder)
 
-        expected_folder_name = "Inception_(2010)_(1080p,_Unknown_Source,_DTS,_5.1)"
+        expected_folder_name = "Inception_(2010)_(1080p_Unknown_Source_DTS_5.1)"
         expected_folder_path = os.path.join(self.test_dir, expected_folder_name)
 
         self.assertEqual(new_folder_path, expected_folder_path)

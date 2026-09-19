@@ -274,7 +274,7 @@ def write_metadata_file(path, url, title, year, metadata, original_filename):
     except Exception as e:
         print(f" -> Failed writing metadata file: {e}")
 
-def process_directory(directory_path, is_root=True):
+def process_directory(directory_path, is_root=False):
     directory_path = os.path.abspath(directory_path)
     video_files = get_video_files(directory_path)
     if not video_files:
@@ -317,7 +317,9 @@ def process_directory(directory_path, is_root=True):
             target_year = release_year
 
         # 3. Construct the clean destination directory name (With no_hit_ prefix if applicable)
-        metadata_suffix = f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
+        metadata_suffix = sanitize_folder_name(
+            f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
+        )
         new_name = f"{target_title}_({target_year})_{metadata_suffix}"
 
         # Determine target layout based on folder context tier
@@ -358,19 +360,20 @@ def process_directory(directory_path, is_root=True):
         # 7. Final Step: Rename the directory itself if it's an existing subdir
         if not is_root:
             parent_dir = os.path.dirname(directory_path)
-            final_subdir_path = os.path.join(parent_dir, new_dir_name)
+            final_subdir_path = os.path.join(parent_dir, new_name)
 
             # Guard against overwriting if name is already perfectly normalized
             if directory_path != final_subdir_path:
-                print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_dir_name}'")
+                print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_name}'")
                 try:
                     os.rename(directory_path, final_subdir_path)
                     # Break out early since the tracking directory path just moved locations
-                    break
+                    return final_subdir_path
                 except Exception as e:
                     print(f"[-] Directory rename failed: {e}")
+            return directory_path
 
-    return None
+    return directory_path if not is_root else None
 
 def main():
     if not TMDB_READ_TOKEN:
