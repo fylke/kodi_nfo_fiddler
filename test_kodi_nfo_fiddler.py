@@ -72,6 +72,18 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["audio_codec"], "Unknown Codec")
         self.assertEqual(metadata["audio_channels"], "Unknown Channels")
 
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_parse_filename_normalizes_web_sources(self, mock_mkv):
+        for source in ("WEB-DL", "WEB", "WEBRip"):
+            with self.subTest(source=source):
+                metadata = parse_filename(
+                    f"Movie.2024.1080p.{source}.mkv",
+                    "Movie.2024.1080p.{0}.mkv".format(source)
+                )
+                self.assertEqual(metadata["source"], "WEBRip")
+
+        mock_mkv.assert_called()
+
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
         mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")

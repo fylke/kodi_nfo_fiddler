@@ -26,6 +26,7 @@ TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
+SOURCE_NORMALIZATIONS = {"WEB-DL": "WEBRip", "WEB": "WEBRip", "BRRip": "BluRay", "BDRip": "BluRay", "DVDRip": "DVD"}
 
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
@@ -77,7 +78,7 @@ def get_mkv_metadata(filepath):
                     elif display_width >= 1280 or display_height >= 720:
                         resolution = "720p"
                     elif display_width >= 720 or display_height >= 480:
-                        resolution = "480p"
+                        resolution = "SD"
                     else:
                         resolution = f"{display_height}p"
 
@@ -237,7 +238,7 @@ def parse_filename(filename, file_path):
     # Deduce Source out of raw string before returning (fallback for non-MKVs)
     for src in SOURCE_KEYWORDS:
         if re.search(r'\b' + re.escape(src) + r'\b', clean_name, re.IGNORECASE):
-            metadata["source"] = src
+            metadata["source"] = SOURCE_NORMALIZATIONS.get(src, src)
             break
 
     # Some release layouts keep the source tag only in the parent directory name.
@@ -245,7 +246,7 @@ def parse_filename(filename, file_path):
         parent_name = os.path.basename(os.path.dirname(file_path))
         for src in SOURCE_KEYWORDS:
             if re.search(r'\b' + re.escape(src) + r'\b', parent_name, re.IGNORECASE):
-                metadata["source"] = src
+                metadata["source"] = SOURCE_NORMALIZATIONS.get(src, src)
                 break
 
     # If the file is an MKV, populate pristine technical parameters directly from the tracks
