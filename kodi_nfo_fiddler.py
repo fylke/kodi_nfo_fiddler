@@ -25,6 +25,7 @@ TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
+SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
 
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
@@ -234,11 +235,18 @@ def parse_filename(filename, file_path):
     metadata["title"] = title_part
 
     # Deduce Source out of raw string before returning (fallback for non-MKVs)
-    source_keywords = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
-    for src in source_keywords:
+    for src in SOURCE_KEYWORDS:
         if re.search(r'\b' + re.escape(src) + r'\b', clean_name, re.IGNORECASE):
             metadata["source"] = src
             break
+
+    # Some release layouts keep the source tag only in the parent directory name.
+    if metadata["source"] == "Unknown Source":
+        parent_name = os.path.basename(os.path.dirname(file_path))
+        for src in SOURCE_KEYWORDS:
+            if re.search(r'\b' + re.escape(src) + r'\b', parent_name, re.IGNORECASE):
+                metadata["source"] = src
+                break
 
     # If the file is an MKV, populate pristine technical parameters directly from the tracks
     if filename.lower().endswith('.mkv'):

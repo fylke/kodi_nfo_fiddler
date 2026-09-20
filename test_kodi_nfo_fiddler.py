@@ -121,6 +121,31 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertTrue(os.path.exists(expected_video_file))
         self.assertTrue(os.path.exists(expected_nfo_file))
 
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_uses_source_from_movie_folder(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/278", "The Chronicles of Riddick", "2004")
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "Unknown Codec",
+            "audio_channels": "Unknown Channels"
+        }
+
+        movie_folder = os.path.join(
+            self.test_dir,
+            "The Chronicles of Riddick (2004) DC (1080p BluRay x265 HEVC 10bit AAC 5.1 Tigole)"
+        )
+        os.makedirs(movie_folder)
+        with open(
+            os.path.join(movie_folder, "The Chronicles of Riddick (2004) DC (1080p x265 10bit Tigole).mkv"),
+            "w"
+        ) as video_file:
+            video_file.write("fake video data")
+
+        new_folder_path = process_directory(movie_folder)
+
+        self.assertIn("BluRay", os.path.basename(new_folder_path))
+
     @patch('subprocess.run')
     def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
         """Verify that a widescreen 1920x802 file correctly maps to 1080p."""
