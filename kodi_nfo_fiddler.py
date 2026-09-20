@@ -217,6 +217,9 @@ def parse_filename(filename, file_path):
     # Strip extension
     base_name, _ = os.path.splitext(filename)
 
+    # Remove site URLs commonly prepended to release names.
+    base_name = re.sub(r'(?:https?://|www\.)[^_\s]+', ' ', base_name, flags=re.IGNORECASE)
+
     # Replace common separators with spaces to standardize tokenization
     clean_name = base_name.replace('_', ' ').replace('.', ' ')
 

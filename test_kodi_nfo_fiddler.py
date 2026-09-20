@@ -202,6 +202,15 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["title"], "Eddie Izzard Sexie")
         self.assertEqual(metadata["year"], "2003")
 
+    def test_parse_filename_removes_prepended_url(self):
+        metadata = parse_filename(
+            "WwW.SeeHD.WS__Free Solo 2018 1080p WEB-DL X264 AC3-SeeHD.mkv",
+            "dummy_path.mkv"
+        )
+
+        self.assertEqual(metadata["title"], "Free Solo")
+        self.assertEqual(metadata["year"], "2018")
+
     @patch('kodi_nfo_fiddler.requests.get')
     def test_search_tmdb_fallback_removes_all_year_filters(self, mock_get):
         strict_response = MagicMock(status_code=200)
