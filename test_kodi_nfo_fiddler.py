@@ -136,6 +136,34 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_sanitizes_colons_in_title(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = (
+            "https://www.themoviedb.org/movie/568",
+            "Mission: Impossible",
+            "1996"
+        )
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "DTS",
+            "audio_channels": "5.1"
+        }
+
+        movie_folder = os.path.join(self.test_dir, "Mission_Raw_Folder")
+        os.makedirs(movie_folder)
+        with open(os.path.join(movie_folder, "mission.mkv"), "w") as video_file:
+            video_file.write("fake video data")
+
+        new_folder_path = process_directory(movie_folder)
+
+        expected_folder_name = "Mission_-_Impossible_(1996)_(1080p_Unknown_Source_DTS_5.1)"
+        expected_folder_path = os.path.join(self.test_dir, expected_folder_name)
+        expected_video_file = os.path.join(expected_folder_path, f"{expected_folder_name}.mkv")
+
+        self.assertEqual(new_folder_path, expected_folder_path)
+        self.assertTrue(os.path.exists(expected_video_file))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_uses_source_from_movie_folder(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = ("https://www.themoviedb.org/movie/278", "The Chronicles of Riddick", "2004")
         mock_mkv.return_value = {

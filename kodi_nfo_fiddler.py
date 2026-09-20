@@ -346,7 +346,8 @@ def process_directory(directory_path, is_root=False):
         metadata_suffix = sanitize_folder_name(
             f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
         )
-        new_name = f"{target_title.replace(" ", "_")}_({target_year})_{metadata_suffix}"
+        sanitized_title = sanitize_folder_name(target_title)
+        new_name = f"{sanitized_title}_({target_year})_{metadata_suffix}"
 
         # Determine target layout based on folder context tier
         if is_root:
