@@ -74,6 +74,16 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["audio_channels"], "Unknown Channels")
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_parse_filename_ignores_no_hit_prefix(self, mock_mkv):
+        metadata = parse_filename(
+            "no_hit_Inception.2010.1080p.BluRay.mp4",
+            "no_hit_Inception.2010.1080p.BluRay.mp4"
+        )
+
+        self.assertEqual(metadata["title"], "Inception")
+        self.assertEqual(metadata["year"], "2010")
+
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_parse_filename_normalizes_web_sources(self, mock_mkv):
         for source in ("WEB-DL", "WEB", "WEBRip"):
             with self.subTest(source=source):
@@ -133,6 +143,62 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertTrue(os.path.exists(expected_video_file))
         self.assertTrue(os.path.exists(expected_nfo_file))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_stores_original_directory_for_no_hit_retry(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = None
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "DTS",
+            "audio_channels": "5.1"
+        }
+
+        movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
+        os.makedirs(movie_folder)
+        with open(os.path.join(movie_folder, "mystery.mkv"), "w") as video_file:
+            video_file.write("fake video data")
+
+        no_hit_path = process_directory(movie_folder)
+        nfo_path = next(
+            os.path.join(no_hit_path, filename)
+            for filename in os.listdir(no_hit_path)
+            if filename.endswith('.nfo')
+        )
+
+        with open(nfo_path, encoding="utf-8") as nfo_file:
+            nfo_contents = nfo_file.read()
+
+        self.assertTrue(os.path.basename(no_hit_path).startswith("no_hit_"))
+        self.assertIn(
+            "<original_directory>Mystery Movie (2024) BluRay</original_directory>",
+            nfo_contents
+        )
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_retries_no_hit_using_original_directory(self, mock_mkv, mock_tmdb):
+        mock_tmdb.side_effect = [
+            None,
+            ("https://www.themoviedb.org/movie/123", "Mystery Movie", "2024")
+        ]
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "DTS",
+            "audio_channels": "5.1"
+        }
+
+        movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
+        os.makedirs(movie_folder)
+        with open(os.path.join(movie_folder, "mystery.mkv"), "w") as video_file:
+            video_file.write("fake video data")
+
+        no_hit_path = process_directory(movie_folder)
+        recovered_path = process_directory(no_hit_path)
+
+        self.assertEqual(mock_tmdb.call_args_list[1].args[:2], ("Mystery Movie", "2024"))
+        self.assertEqual(os.path.basename(recovered_path).startswith("no_hit_"), False)
+        self.assertIn("Mystery_Movie_(2024)", os.path.basename(recovered_path))
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')

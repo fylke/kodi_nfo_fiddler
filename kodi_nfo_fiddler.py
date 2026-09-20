@@ -11,6 +11,8 @@ import re
 import shutil
 import json
 import subprocess
+import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 import requests
 from dotenv import load_dotenv
 
@@ -216,6 +218,7 @@ def parse_filename(filename, file_path):
 
     # Strip extension
     base_name, _ = os.path.splitext(filename)
+    base_name = re.sub(r'^no_hit_', '', base_name, count=1, flags=re.IGNORECASE)
 
     # Remove site URLs commonly prepended to release names.
     base_name = re.sub(r'(?:https?://|www\.)[^_\s]+', ' ', base_name, flags=re.IGNORECASE)
@@ -299,8 +302,30 @@ def write_metadata_file(path, url, title, year, metadata, original_filename):
     except Exception as e:
         print(f" -> Failed writing metadata file: {e}")
 
+def get_original_directory(directory_path):
+    """Reads the original directory name from an existing NFO, if available."""
+    for filename in os.listdir(directory_path):
+        if not filename.lower().endswith('.nfo'):
+            continue
+
+        try:
+            root = ET.parse(os.path.join(directory_path, filename)).getroot()
+            original_directory = root.findtext('original_directory')
+            if original_directory:
+                return original_directory
+        except (OSError, ET.ParseError):
+            continue
+
+    return None
+
 def process_directory(directory_path, is_root=False):
     directory_path = os.path.abspath(directory_path)
+    original_directory = os.path.basename(directory_path)
+    stored_directory = None
+    if original_directory.startswith("no_hit_"):
+        stored_directory = get_original_directory(directory_path)
+        if stored_directory:
+            original_directory = stored_directory
     remove_unwanted_files(directory_path)
     video_files = get_video_files(directory_path)
     if not video_files:
@@ -316,8 +341,10 @@ def process_directory(directory_path, is_root=False):
         _, ext = os.path.splitext(filename)
         print(f" -> Processing file: {filename}")
 
-        # Clean up filename metadata
+        # Prefer the original directory metadata when retrying a previous no-hit.
         metadata = parse_filename(filename, file_path)
+        if stored_directory:
+            metadata = parse_filename(stored_directory, file_path)
 
         # 1. Safely call the TMDB search
         search_result = search_tmdb(metadata['title'], metadata['year'])
@@ -373,6 +400,7 @@ def process_directory(directory_path, is_root=False):
             nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
             nfo.write("<movie>\n")
             nfo.write(f"    <!-- Original Filename: {original_filename} -->\n")
+            nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
             nfo.write(f"    <title>{metadata['title']}</title>\n")
             nfo.write(f"    <year>{metadata['year']}</year>\n")
 
