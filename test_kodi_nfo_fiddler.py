@@ -10,6 +10,7 @@ from kodi_nfo_fiddler import (
     get_mkv_metadata,
     parse_filename,
     sanitize_folder_name,
+    search_tmdb,
     process_directory,
     write_metadata_file
 )
@@ -191,6 +192,30 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertEqual(metadata["title"], "Toy Story")
         self.assertEqual(metadata["year"], "1995")
+
+    @patch('kodi_nfo_fiddler.requests.get')
+    def test_search_tmdb_fallback_removes_all_year_filters(self, mock_get):
+        strict_response = MagicMock(status_code=200)
+        strict_response.json.return_value = {"results": []}
+        fallback_response = MagicMock(status_code=200)
+        fallback_response.json.return_value = {
+            "results": [{
+                "id": 683127,
+                "title": "Earwig and the Witch",
+                "release_date": "2021-02-03"
+            }]
+        }
+        mock_get.side_effect = [strict_response, fallback_response]
+
+        result = search_tmdb("Earwig and the Witch", "2020")
+
+        self.assertEqual(
+            result,
+            ("https://www.themoviedb.org/movie/683127", "Earwig and the Witch", "2021")
+        )
+        fallback_params = mock_get.call_args_list[1].kwargs["params"]
+        self.assertNotIn("year", fallback_params)
+        self.assertNotIn("primary_release_year", fallback_params)
         
 if __name__ == '__main__':
     unittest.main()

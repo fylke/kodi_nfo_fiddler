@@ -168,7 +168,8 @@ def search_tmdb(title, year):
         # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
         if year and year != "Unknown Year":
             print(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
-            params.pop("year", None)  # Remove the strict year lock
+            params.pop("year", None)
+            params.pop("primary_release_year", None)
 
             response = requests.get(BASE_URL, headers=headers, params=params)
             if response.status_code == 200:
