@@ -193,6 +193,15 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["title"], "Toy Story")
         self.assertEqual(metadata["year"], "1995")
 
+    def test_parse_filename_with_year_attached_to_title(self):
+        metadata = parse_filename(
+            "Eddie.Izzard.Sexie2003.x264.aac.mkv",
+            "dummy_path.mkv"
+        )
+
+        self.assertEqual(metadata["title"], "Eddie Izzard Sexie")
+        self.assertEqual(metadata["year"], "2003")
+
     @patch('kodi_nfo_fiddler.requests.get')
     def test_search_tmdb_fallback_removes_all_year_filters(self, mock_get):
         strict_response = MagicMock(status_code=200)

@@ -220,8 +220,8 @@ def parse_filename(filename, file_path):
     # Replace common separators with spaces to standardize tokenization
     clean_name = base_name.replace('_', ' ').replace('.', ' ')
 
-    # Extract Year: Look for a 4-digit number starting with 19 or 20 enclosed or separated cleanly
-    year_match = re.search(r'\b(19\d{2}|2\d{3})\b', clean_name)
+    # Extract Year: allow it to immediately follow a title, but not another digit.
+    year_match = re.search(r'(?<!\d)(19\d{2}|2\d{3})\b', clean_name)
 
     if year_match:
         metadata["year"] = year_match.group(1)
