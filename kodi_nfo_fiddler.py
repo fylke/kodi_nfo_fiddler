@@ -280,6 +280,7 @@ def remove_unwanted_files(directory):
 
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
+    name = name.replace(":", "_-")
     sanitized = re.sub(r'[^\w\s\(\)\.,-]', '', name)
     return sanitized.replace(" ", "_")
 

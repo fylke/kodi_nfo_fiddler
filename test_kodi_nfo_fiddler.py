@@ -54,7 +54,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     def test_sanitize_folder_name(self):
         raw_name = "The Movie: Director's Cut (2024) (1080p, BluRay, DTS, 5.1)"
-        expected = "The_Movie_Directors_Cut_(2024)_(1080p,_BluRay,_DTS,_5.1)"
+        expected = "The_Movie_-_Directors_Cut_(2024)_(1080p,_BluRay,_DTS,_5.1)"
 
         sanitized = sanitize_folder_name(raw_name)
         self.assertEqual(sanitized, expected)
