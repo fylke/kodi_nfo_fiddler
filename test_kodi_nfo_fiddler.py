@@ -171,9 +171,14 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertTrue(os.path.basename(no_hit_path).startswith("no_hit_"))
         self.assertIn(
+            "<original_filename>mystery.mkv</original_filename>",
+            nfo_contents
+        )
+        self.assertIn(
             "<original_directory>Mystery Movie (2024) BluRay</original_directory>",
             nfo_contents
         )
+        self.assertNotIn("<!-- Original Filename:", nfo_contents)
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
@@ -272,6 +277,24 @@ class TestMovieOrganizer(unittest.TestCase):
                     }
                 }
             ]
+        })
+
+        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["resolution"], "1080p")
+
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_cropped_1080p(self, mock_run):
+        """Verify that a slightly cropped 1916x1034 file maps to 1080p."""
+        mock_stdout = json.dumps({
+            "tracks": [{
+                "type": "video",
+                "properties": {
+                    "display_dimensions": "1916x1034"
+                }
+            }]
         })
 
         mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)

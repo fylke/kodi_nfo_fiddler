@@ -75,7 +75,7 @@ def get_mkv_metadata(filepath):
 
                     if display_width >= 3840 or display_height >= 2160:
                         resolution = "2160p"
-                    elif display_width >= 1920 or display_height >= 1080:
+                    elif display_width >= 1900 or display_height >= 1030:
                         resolution = "1080p"
                     elif display_width >= 1280 or display_height >= 720:
                         resolution = "720p"
@@ -399,7 +399,7 @@ def process_directory(directory_path, is_root=False):
         with open(nfo_file_path, 'w', encoding='utf-8') as nfo:
             nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
             nfo.write("<movie>\n")
-            nfo.write(f"    <!-- Original Filename: {original_filename} -->\n")
+            nfo.write(f"    <original_filename>{escape(original_filename)}</original_filename>\n")
             nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
             nfo.write(f"    <title>{metadata['title']}</title>\n")
             nfo.write(f"    <year>{metadata['year']}</year>\n")
