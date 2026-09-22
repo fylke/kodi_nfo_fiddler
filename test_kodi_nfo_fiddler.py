@@ -40,6 +40,12 @@ class TestMovieOrganizer(unittest.TestCase):
                     "properties": {
                         "audio_channels": 6
                     }
+                },
+                {
+                    "type": "subtitles",
+                    "properties": {
+                        "language_ietf": "en-US"
+                    }
                 }
             ]
         })
@@ -51,6 +57,20 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["resolution"], "1080p")
         self.assertEqual(metadata["audio_codec"], "DTS")
         self.assertEqual(metadata["audio_channels"], "5.1")
+        self.assertTrue(metadata["english_subtitles"])
+
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_reports_missing_english_subtitles(self, mock_run):
+        mock_run.return_value = MagicMock(stdout=json.dumps({
+            "tracks": [{
+                "type": "subtitles",
+                "properties": {"language": "fra"}
+            }]
+        }), returncode=0)
+
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertFalse(metadata["english_subtitles"])
 
     def test_sanitize_folder_name(self):
         raw_name = "The Movie: Director's Cut (2024) (1080p, BluRay, DTS, 5.1)"
@@ -112,6 +132,62 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertFalse(os.path.exists(txt_path))
         self.assertFalse(os.path.exists(jpg_path))
         self.assertTrue(os.path.exists(keep_path))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_removes_featurettes_folder(self, mock_tmdb):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+
+        video_path = os.path.join(self.test_dir, "inception.mp4")
+        featurettes_path = os.path.join(self.test_dir, "Featurettes")
+        os.makedirs(featurettes_path)
+        with open(video_path, "w") as video_file:
+            video_file.write("test")
+        with open(os.path.join(featurettes_path, "behind_the_scenes.mp4"), "w") as featurette:
+            featurette.write("test")
+
+        process_directory(self.test_dir, is_root=True)
+
+        self.assertFalse(os.path.exists(featurettes_path))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_removes_sample_file_and_folder(self, mock_tmdb):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+
+        video_path = os.path.join(self.test_dir, "inception.mp4")
+        sample_file_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
+        sample_folder_path = os.path.join(self.test_dir, "sample-footage")
+        with open(video_path, "w") as video_file:
+            video_file.write("test")
+        with open(sample_file_path, "w") as sample_file:
+            sample_file.write("test")
+        os.makedirs(sample_folder_path)
+        with open(os.path.join(sample_folder_path, "clip.mp4"), "w") as sample_clip:
+            sample_clip.write("test")
+
+        process_directory(self.test_dir, is_root=True)
+
+        self.assertFalse(os.path.exists(sample_file_path))
+        self.assertFalse(os.path.exists(sample_folder_path))
+
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_warns_when_mkv_has_no_english_subtitles(self, mock_tmdb, mock_mkv):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "DTS",
+            "audio_channels": "5.1",
+            "english_subtitles": False
+        }
+
+        video_path = os.path.join(self.test_dir, "inception.mkv")
+        with open(video_path, "w") as video_file:
+            video_file.write("test")
+
+        with patch('builtins.print') as mock_print:
+            process_directory(self.test_dir, is_root=True)
+
+        self.assertTrue(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')

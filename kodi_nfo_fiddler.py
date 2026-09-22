@@ -45,11 +45,18 @@ def get_mkv_metadata(filepath):
         resolution = "Unknown Resolution"
         audio_codec = "Unknown Codec"
         audio_channels = "Unknown Channels"
+        english_subtitles = False
 
         tracks = data.get("tracks", [])
         for track in tracks:
             track_type = track.get("type")
             properties = track.get("properties", {})
+
+            if track_type == "subtitles":
+                language = properties.get("language_ietf") or properties.get("language", "")
+                normalized_language = language.lower()
+                if normalized_language in ("english", "eng", "en") or normalized_language.startswith("en-"):
+                    english_subtitles = True
 
             # Extract Video Info (Direct integer targeting for reliability)
             if track_type == "video" and resolution == "Unknown Resolution":
@@ -123,7 +130,8 @@ def get_mkv_metadata(filepath):
         return {
             "resolution": resolution,
             "audio_codec": audio_codec,
-            "audio_channels": audio_channels
+            "audio_channels": audio_channels,
+            "english_subtitles": english_subtitles
         }
 
     except Exception:
@@ -281,6 +289,30 @@ def remove_unwanted_files(directory):
     except Exception:
         pass
 
+def remove_featurettes_folder(directory):
+    """Removes a Featurettes folder from the given movie directory."""
+    featurettes_path = os.path.join(directory, "Featurettes")
+    try:
+        if os.path.isdir(featurettes_path):
+            shutil.rmtree(featurettes_path)
+    except Exception:
+        pass
+
+def remove_sample_entries(directory):
+    """Removes files or folders starting with sample from the given movie directory."""
+    try:
+        for filename in os.listdir(directory):
+            if not filename.lower().startswith("sample"):
+                continue
+
+            sample_path = os.path.join(directory, filename)
+            if os.path.isdir(sample_path):
+                shutil.rmtree(sample_path)
+            elif os.path.isfile(sample_path):
+                os.remove(sample_path)
+    except Exception:
+        pass
+
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
     name = name.replace(":", "_-")
@@ -327,6 +359,8 @@ def process_directory(directory_path, is_root=False):
         if stored_directory:
             original_directory = stored_directory
     remove_unwanted_files(directory_path)
+    remove_featurettes_folder(directory_path)
+    remove_sample_entries(directory_path)
     video_files = get_video_files(directory_path)
     if not video_files:
         return None
@@ -345,6 +379,9 @@ def process_directory(directory_path, is_root=False):
         metadata = parse_filename(filename, file_path)
         if stored_directory:
             metadata = parse_filename(stored_directory, file_path)
+
+        if filename.lower().endswith('.mkv') and not metadata.get("english_subtitles", False):
+            print(f"[!] WARNING: No English subtitles found in '{filename}'.")
 
         # 1. Safely call the TMDB search
         search_result = search_tmdb(metadata['title'], metadata['year'])
