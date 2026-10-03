@@ -357,6 +357,12 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(new_folder_path, expected_folder_path)
         self.assertTrue(os.path.exists(expected_video_file))
 
+        nfo_path = os.path.join(expected_folder_path, f"{expected_folder_name}.nfo")
+        with open(nfo_path, encoding="utf-8") as nfo_file:
+            nfo_contents = nfo_file.read()
+
+        self.assertIn("<title>Mission: Impossible</title>", nfo_contents)
+
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_uses_source_from_movie_folder(self, mock_mkv, mock_tmdb):

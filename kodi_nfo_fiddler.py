@@ -461,7 +461,7 @@ def process_directory(directory_path, is_root=False):
             nfo.write("<movie>\n")
             nfo.write(f"    <original_filename>{escape(original_filename)}</original_filename>\n")
             nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
-            nfo.write(f"    <title>{metadata['title']}</title>\n")
+            nfo.write(f"    <title>{escape(file_title)}</title>\n")
             nfo.write(f"    <year>{metadata['year']}</year>\n")
 
             if is_hit:
