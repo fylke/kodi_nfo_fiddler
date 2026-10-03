@@ -279,6 +279,27 @@ def get_video_files(directory):
     except Exception:
         return []
 
+def remove_smaller_video_files(directory):
+    """Removes smaller video files when the largest is at least twice as large."""
+    video_files = get_video_files(directory)
+    if len(video_files) < 2:
+        return
+
+    files_by_size = sorted(
+        video_files,
+        key=lambda filename: os.path.getsize(os.path.join(directory, filename)),
+        reverse=True
+    )
+    largest_size = os.path.getsize(os.path.join(directory, files_by_size[0]))
+    second_largest_size = os.path.getsize(os.path.join(directory, files_by_size[1]))
+    if largest_size < 2 * second_largest_size:
+        return
+
+    for filename in files_by_size[1:]:
+        file_path = os.path.join(directory, filename)
+        print(f"[+] Removing smaller video file: {filename}")
+        os.remove(file_path)
+
 def remove_unwanted_files(directory):
     """Removes TXT and JPG files from the given directory (non-recursive)."""
     try:
@@ -361,6 +382,8 @@ def process_directory(directory_path, is_root=False):
     remove_unwanted_files(directory_path)
     remove_featurettes_folder(directory_path)
     remove_sample_entries(directory_path)
+    if not is_root:
+        remove_smaller_video_files(directory_path)
     video_files = get_video_files(directory_path)
     if not video_files:
         return None
