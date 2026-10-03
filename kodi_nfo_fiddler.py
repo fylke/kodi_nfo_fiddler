@@ -281,7 +281,7 @@ def get_video_files(directory):
 
 def remove_smaller_video_files(directory):
     """Removes smaller video files when the largest is at least twice as large."""
-    video_files = get_video_files(directory)
+    video_files = [filename for filename in get_video_files(directory) if filename.lower().endswith('.mkv')]
     if len(video_files) < 2:
         return
 
@@ -392,6 +392,10 @@ def process_directory(directory_path, is_root=False):
     print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {num_videos} video file(s))")
 
     for filename in video_files:
+        if not filename.lower().endswith('.mkv'):
+            print(f"[!] Skipping non-MKV media file: {filename}")
+            continue
+
         # Keep track of the untouched original filename
         original_filename = filename
         file_path = os.path.join(directory_path, filename)

@@ -134,12 +134,25 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertTrue(os.path.exists(keep_path))
 
     @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_skips_non_mkv_media(self, mock_tmdb):
+        video_path = os.path.join(self.test_dir, "inception.mp4")
+        with open(video_path, "w") as video_file:
+            video_file.write("test")
+
+        with patch('builtins.print') as mock_print:
+            process_directory(self.test_dir, is_root=True)
+
+        self.assertTrue(os.path.exists(video_path))
+        mock_tmdb.assert_not_called()
+        self.assertTrue(any("Skipping non-MKV media file" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb):
         mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
         movie_dir = os.path.join(self.test_dir, "movie")
         os.makedirs(movie_dir)
-        large_path = os.path.join(movie_dir, "inception.mp4")
-        small_path = os.path.join(movie_dir, "inception-trailer.mp4")
+        large_path = os.path.join(movie_dir, "inception.mkv")
+        small_path = os.path.join(movie_dir, "inception-trailer.mkv")
         with open(large_path, "wb") as video_file:
             video_file.write(b"a" * 200)
         with open(small_path, "wb") as video_file:
@@ -150,7 +163,7 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertFalse(os.path.exists(small_path))
         self.assertEqual(
             [name for name in os.listdir(processed_dir) if name.lower().endswith((".mp4", ".mkv", ".avi", ".m4v", ".mov", ".flv", ".wmv"))],
-            [os.path.basename(processed_dir) + ".mp4"]
+            [os.path.basename(processed_dir) + ".mkv"]
         )
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
@@ -171,7 +184,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         process_directory(self.test_dir, is_root=True)
 
-        self.assertEqual(mock_tmdb.call_count, 2)
+        self.assertEqual(mock_tmdb.call_count, 1)
         self.assertEqual(
             sum(
                 1 for _, _, filenames in os.walk(self.test_dir)
