@@ -73,8 +73,8 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertFalse(metadata["english_subtitles"])
 
     def test_sanitize_folder_name(self):
-        raw_name = "The Movie: Director's Cut (2024) (1080p, BluRay, DTS, 5.1)"
-        expected = "The_Movie_-_Directors_Cut_(2024)_(1080p,_BluRay,_DTS,_5.1)"
+        raw_name = "The Movie: Director's! Cut (2024) (1080p, BluRay, DTS, 5.1)"
+        expected = "The_Movie_-_Director's!_Cut_(2024)_(1080p,_BluRay,_DTS,_5.1)"
 
         sanitized = sanitize_folder_name(raw_name)
         self.assertEqual(sanitized, expected)
@@ -344,10 +344,10 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_sanitizes_colons_in_title(self, mock_mkv, mock_tmdb):
+    def test_process_directory_preserves_apostrophes_and_exclamation_marks(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = (
             "https://www.themoviedb.org/movie/568",
-            "Mission: Impossible",
+            "Mission's: Impossible!",
             "1996"
         )
         mock_mkv.return_value = {
@@ -363,7 +363,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         new_folder_path = process_directory(movie_folder)
 
-        expected_folder_name = "Mission_-_Impossible_(1996)_(1080p_Unknown_Source_DTS_5.1)"
+        expected_folder_name = "Mission's_-_Impossible!_(1996)_(1080p_Unknown_Source_DTS_5.1)"
         expected_folder_path = os.path.join(self.test_dir, expected_folder_name)
         expected_video_file = os.path.join(expected_folder_path, f"{expected_folder_name}.mkv")
 
@@ -374,7 +374,7 @@ class TestMovieOrganizer(unittest.TestCase):
         with open(nfo_path, encoding="utf-8") as nfo_file:
             nfo_contents = nfo_file.read()
 
-        self.assertIn("<title>Mission: Impossible</title>", nfo_contents)
+        self.assertIn("<title>Mission's: Impossible!</title>", nfo_contents)
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
