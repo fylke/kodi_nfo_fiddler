@@ -40,6 +40,18 @@ SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
     "sv": ("sv", "swe", "swedish", "svenska"),
 }
+# Ordered: the first entry with a matching needle wins (e.g. DTS-HD before DTS, EAC3 before AC3).
+AUDIO_CODEC_NAMES = [
+    (("DTS-HD",), "DTS-HD"),
+    (("DTS",), "DTS"),
+    (("TRUEHD", "ATMOS"), "TrueHD"),
+    (("EAC3", "E-AC-3"), "E-AC3"),
+    (("AC3", "AC-3"), "AC3"),
+    (("AAC",), "AAC"),
+    (("OPUS",), "Opus"),
+    (("FLAC",), "FLAC"),
+]
+AUDIO_CHANNEL_LAYOUTS = {8: "7.1", 6: "5.1", 2: "2.0", 1: "1.0"}
 
 
 def print_warning(message):
@@ -128,6 +140,47 @@ def remux_mp4_to_mkv(mp4_path):
         return None
 
 
+def classify_resolution(width, height):
+    """Buckets pixel dimensions into a resolution label (tolerant of cropped widescreen encodes)."""
+    if width >= 3840 or height >= 2160:
+        return "2160p"
+    if width >= 1900 or height >= 1030:
+        return "1080p"
+    if width >= 1280 or height >= 720:
+        return "720p"
+    if width >= 720 or height >= 480:
+        return "SD"
+    return f"{height}p"
+
+def get_video_dimensions(properties):
+    """Returns (width, height) from mkvmerge video track properties, or None if unavailable."""
+    width = properties.get("pixel_width") or properties.get("display_width")
+    height = properties.get("pixel_height") or properties.get("display_height")
+    if width and height:
+        return int(width), int(height)
+
+    dimensions = properties.get("display_dimensions") or properties.get("pixel_dimensions")
+    if dimensions and 'x' in dimensions:
+        try:
+            width, height = dimensions.split('x')
+            return int(width), int(height)
+        except ValueError:
+            pass
+    return None
+
+def describe_audio(track):
+    """Returns (codec, channel layout) labels for an mkvmerge audio track."""
+    codec_id = track.get("codec", "").upper()
+    codec = next(
+        (name for needles, name in AUDIO_CODEC_NAMES if any(needle in codec_id for needle in needles)),
+        codec_id.replace("A_", "")
+    )
+
+    channels = track.get("properties", {}).get("audio_channels")
+    if not channels:
+        return codec, "Unknown Channels"
+    return codec, AUDIO_CHANNEL_LAYOUTS.get(channels, f"{channels}.0")
+
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
     try:
@@ -138,101 +191,36 @@ def get_mkv_metadata(filepath):
             text=True,
             check=True
         )
-        data = json.loads(result.stdout)
-
-        resolution = "Unknown Resolution"
-        audio_codec = "Unknown Codec"
-        audio_channels = "Unknown Channels"
-        english_subtitles = False
-
-        tracks = data.get("tracks", [])
-        for track in tracks:
-            track_type = track.get("type")
-            properties = track.get("properties", {})
-
-            if track_type == "subtitles":
-                language_tag = properties.get("language_ietf") or properties.get("language", "")
-                if is_language(language_tag, "en"):
-                    english_subtitles = True
-
-            # Extract Video Info (Direct integer targeting for reliability)
-            if track_type == "video" and resolution == "Unknown Resolution":
-                # 1. Grab raw integer properties first if available
-                display_width = properties.get("pixel_width") or properties.get("display_width")
-                display_height = properties.get("pixel_height") or properties.get("display_height")
-
-                # 2. Fallback to string splitting ONLY if integers aren't present
-                if not display_width or not display_height:
-                    dimensions = properties.get("display_dimensions") or properties.get("pixel_dimensions")
-                    if dimensions and 'x' in dimensions:
-                        try:
-                            w_str, h_str = dimensions.split('x')
-                            display_width = int(w_str)
-                            display_height = int(h_str)
-                        except ValueError:
-                            pass
-
-                # 3. Perform safety check. If we successfully found numbers, execute bucketing logic
-                if display_width and display_height:
-                    display_width = int(display_width)
-                    display_height = int(display_height)
-
-                    if display_width >= 3840 or display_height >= 2160:
-                        resolution = "2160p"
-                    elif display_width >= 1900 or display_height >= 1030:
-                        resolution = "1080p"
-                    elif display_width >= 1280 or display_height >= 720:
-                        resolution = "720p"
-                    elif display_width >= 720 or display_height >= 480:
-                        resolution = "SD"
-                    else:
-                        resolution = f"{display_height}p"
-
-            # Extract Audio Info (Codec & Channels)
-            elif track_type == "audio" and audio_codec == "Unknown Codec":
-                codec_id = track.get("codec", "").upper()
-
-                if "DTS-HD" in codec_id:
-                    audio_codec = "DTS-HD"
-                elif "DTS" in codec_id:
-                    audio_codec = "DTS"
-                elif "TRUEHD" in codec_id or "ATMOS" in codec_id:
-                    audio_codec = "TrueHD"
-                elif "EAC3" in codec_id or "E-AC-3" in codec_id:
-                    audio_codec = "E-AC3"
-                elif "AC3" in codec_id or "AC-3" in codec_id:
-                    audio_codec = "AC3"
-                elif "AAC" in codec_id:
-                    audio_codec = "AAC"
-                elif "OPUS" in codec_id:
-                    audio_codec = "Opus"
-                elif "FLAC" in codec_id:
-                    audio_codec = "FLAC"
-                else:
-                    audio_codec = codec_id.replace("A_", "")
-
-                channels = properties.get("audio_channels")
-                if channels:
-                    if channels == 8:
-                        audio_channels = "7.1"
-                    elif channels == 6:
-                        audio_channels = "5.1"
-                    elif channels == 2:
-                        audio_channels = "2.0"
-                    elif channels == 1:
-                        audio_channels = "1.0"
-                    else:
-                        audio_channels = f"{channels}.0"
-
-        return {
-            "resolution": resolution,
-            "audio_codec": audio_codec,
-            "audio_channels": audio_channels,
-            "english_subtitles": english_subtitles
-        }
-
-    except Exception:
+        tracks = json.loads(result.stdout).get("tracks", [])
+    except (OSError, subprocess.CalledProcessError, ValueError) as e:
+        print_warning(f"[!] Could not read MKV metadata for '{os.path.basename(filepath)}': {e}")
         return None
+
+    resolution = "Unknown Resolution"
+    audio_codec = "Unknown Codec"
+    audio_channels = "Unknown Channels"
+    english_subtitles = False
+
+    for track in tracks:
+        track_type = track.get("type")
+        properties = track.get("properties", {})
+
+        if track_type == "subtitles":
+            language_tag = properties.get("language_ietf") or properties.get("language", "")
+            english_subtitles = english_subtitles or is_language(language_tag, "en")
+        elif track_type == "video" and resolution == "Unknown Resolution":
+            dimensions = get_video_dimensions(properties)
+            if dimensions:
+                resolution = classify_resolution(*dimensions)
+        elif track_type == "audio" and audio_codec == "Unknown Codec":
+            audio_codec, audio_channels = describe_audio(track)
+
+    return {
+        "resolution": resolution,
+        "audio_codec": audio_codec,
+        "audio_channels": audio_channels,
+        "english_subtitles": english_subtitles
+    }
 
 def search_tmdb(title, year):
     """
@@ -453,25 +441,21 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
     if not video_files:
         return None
 
-    num_videos = len(video_files)
-    print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {num_videos} video file(s))")
+    print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {len(video_files)} video file(s))")
 
     for filename in video_files:
         original_filename = filename
         file_path = os.path.join(directory_path, filename)
-        ext = os.path.splitext(filename)[1]
         if remux_mp4 and filename.lower().endswith('.mp4'):
-            converted_path = remux_mp4_to_mkv(file_path)
-            if converted_path is None:
+            file_path = remux_mp4_to_mkv(file_path)
+            if file_path is None:
                 continue
-            file_path = converted_path
             filename = f"{os.path.splitext(original_filename)[0]}.mkv"
-            ext = ".mkv"
         elif not filename.lower().endswith('.mkv'):
             print_warning(f"[!] Skipping non-MKV media file: {filename}")
             continue
 
-        # Keep track of the untouched original filename
+        ext = os.path.splitext(filename)[1]
         print(f" -> Processing file: {filename}")
 
         # Prefer the original directory metadata when retrying a previous no-hit.
@@ -479,69 +463,53 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         if stored_directory:
             metadata = parse_filename(stored_directory, file_path)
 
-        if filename.lower().endswith('.mkv') and not metadata.get("english_subtitles", False):
+        if not metadata.get("english_subtitles", False):
             print_warning(f"[!] WARNING: No English subtitles found in '{filename}'.")
 
-        # 1. Safely call the TMDB search
         search_result = search_tmdb(metadata['title'], metadata['year'])
 
-        # Initialize flags, folder target names, and pure file title tracks
-        is_hit = True
-        file_title = metadata['title']
-        target_year = metadata['year']
-        tmdb_url = ""
-
-        # 2. The No-Hit Fallback Switch
         if search_result is None:
             print_warning(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
-            is_hit = False
-            # Folder title gets the prefix flag
-            target_title = f"no_hit_{metadata['title']}"
+            tmdb_id = None
+            file_title = metadata['title']
+            target_title = f"no_hit_{file_title}"
+            target_year = metadata['year']
         else:
-            # Safe to unpack if it's a valid hit
-            tmdb_url, matched_title, release_year = search_result
-            # Normalize target names to official TMDB naming conventions
-            target_title = matched_title
-            file_title = matched_title
-            target_year = release_year
+            # Use the official TMDB title and release year for naming
+            tmdb_url, file_title, target_year = search_result
+            tmdb_id = tmdb_url.split('/')[-1]
+            target_title = file_title
 
-        # 3. Construct the clean destination directory name (With no_hit_ prefix if applicable)
+        # Construct the clean destination directory name (with no_hit_ prefix if applicable)
         metadata_suffix = sanitize_folder_name(
             f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
         )
         sanitized_title = sanitize_folder_name(target_title)
         new_name = f"{sanitized_title}_({target_year})_{metadata_suffix}"
 
-        # Determine target layout based on folder context tier
+        # Loose files in the root get a new folder; files in an existing subdirectory stay put
         if is_root:
-            # Create a brand new folder inside the landing directory root
             dest_dir = os.path.join(directory_path, new_name)
             os.makedirs(dest_dir, exist_ok=True)
         else:
-            # Keep operations local to the current working subdirectory
             dest_dir = directory_path
 
-        new_file_name = f"{new_name}{ext}"
-        new_file_path = os.path.join(dest_dir, new_file_name)
+        new_file_path = os.path.join(dest_dir, f"{new_name}{ext}")
 
-        # 4. Move/Rename the movie asset file into position
         print(f"[+] Setting asset to: {new_file_path}")
         os.rename(file_path, new_file_path)
 
-        # 5. Generate the .nfo file sidecar matching the filename pattern
-        nfo_file_name = f"{new_name}.nfo"
-        nfo_file_path = os.path.join(dest_dir, nfo_file_name)
-
+        # Write the .nfo sidecar next to the video
         write_kodi_nfo(
-            nfo_file_path,
+            os.path.join(dest_dir, f"{new_name}.nfo"),
             file_title,
             metadata['year'],
-            tmdb_id=tmdb_url.split('/')[-1] if is_hit else None,
+            tmdb_id=tmdb_id,
             original_filename=original_filename,
             original_directory=original_directory,
         )
 
-        # 7. Final Step: Rename the directory itself if it's an existing subdir
+        # Rename the directory itself if it's an existing subdir
         if not is_root:
             parent_dir = os.path.dirname(directory_path)
             final_subdir_path = os.path.join(parent_dir, new_name)
@@ -551,7 +519,7 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
                 print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_name}'")
                 try:
                     os.rename(directory_path, final_subdir_path)
-                    # Break out early since the tracking directory path just moved locations
+                    # Return early since the tracking directory path just moved locations
                     return final_subdir_path
                 except Exception as e:
                     print(f"[-] Directory rename failed: {e}")

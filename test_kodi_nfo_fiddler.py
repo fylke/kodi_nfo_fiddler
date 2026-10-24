@@ -17,6 +17,8 @@ from kodi_nfo_fiddler import (
     find_sidecar_subtitles,
     is_language,
     detect_source,
+    classify_resolution,
+    describe_audio,
     remux_mp4_to_mkv,
     upgrade_nfo_file,
     upgrade_nfo_files,
@@ -191,6 +193,33 @@ class TestMovieOrganizer(unittest.TestCase):
 
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertNotIn("\033[", output)
+
+    def test_classify_resolution_buckets(self):
+        self.assertEqual(classify_resolution(3840, 1600), "2160p")
+        self.assertEqual(classify_resolution(1920, 800), "1080p")
+        self.assertEqual(classify_resolution(1280, 536), "720p")
+        self.assertEqual(classify_resolution(720, 400), "SD")
+        self.assertEqual(classify_resolution(640, 360), "360p")
+
+    def test_describe_audio_names_codec_and_channels(self):
+        cases = (
+            ("A_DTS", 6, ("DTS", "5.1")),
+            ("A_EAC3", 8, ("E-AC3", "7.1")),
+            ("A_AC3", 2, ("AC3", "2.0")),
+            ("A_TRUEHD", 10, ("TrueHD", "10.0")),
+            ("A_VORBIS", None, ("VORBIS", "Unknown Channels")),
+        )
+        for codec, channels, expected in cases:
+            with self.subTest(codec=codec):
+                track = {"codec": codec, "properties": {"audio_channels": channels}}
+                self.assertEqual(describe_audio(track), expected)
+
+    @patch('subprocess.run', side_effect=FileNotFoundError("mkvmerge"))
+    def test_get_mkv_metadata_warns_and_returns_none_when_mkvmerge_fails(self, mock_run):
+        with patch('builtins.print') as mock_print:
+            self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
+
+        self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
 
     def test_is_language_matches_tags_and_regional_variants(self):
         for tag in ("en", "eng", "English", "en-US", "EN-gb"):
