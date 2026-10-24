@@ -30,6 +30,15 @@ from kodi_nfo_fiddler import (
 def _movie(tmdb_id, title, year):
     return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": None}
 
+def _mkv_info(resolution="1080p", audio_codec="DTS", audio_channels="5.1", **extra):
+    return {"resolution": resolution, "audio_codec": audio_codec, "audio_channels": audio_channels, **extra}
+
+
+def _write(path, content="x"):
+    with open(path, "wb" if isinstance(content, bytes) else "w") as file:
+        file.write(content)
+
+
 class TempDirTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -228,8 +237,7 @@ class SubtitleAndRemuxTests(TempDirTestCase):
             "Movie.2024.fr.srt",
         )
         for filename in sidecars:
-            with open(os.path.join(self.test_dir, filename), "w") as subtitle:
-                subtitle.write("subtitle")
+            _write(os.path.join(self.test_dir, filename), "subtitle")
 
         found = find_sidecar_subtitles(video_path)
 
@@ -248,13 +256,11 @@ class SubtitleAndRemuxTests(TempDirTestCase):
         english_path = os.path.join(self.test_dir, "Movie.en.srt")
         swedish_path = os.path.join(self.test_dir, "Movie.sv.srt")
         for path in (mp4_path, english_path, swedish_path):
-            with open(path, "w") as file:
-                file.write("test")
+            _write(path, "test")
 
         def create_output(command, **kwargs):
             output_index = command.index("-o") + 1
-            with open(command[output_index], "w") as output:
-                output.write("mkv")
+            _write(command[output_index], "mkv")
             return MagicMock(returncode=0)
 
         mock_run.side_effect = create_output
@@ -278,8 +284,7 @@ class SubtitleAndRemuxTests(TempDirTestCase):
         mp4_path = os.path.join(self.test_dir, "Movie.mp4")
         subtitle_path = os.path.join(self.test_dir, "Movie.en.srt")
         for path in (mp4_path, subtitle_path):
-            with open(path, "w") as file:
-                file.write("video")
+            _write(path, "video")
 
         self.assertIsNone(remux_mp4_to_mkv(mp4_path))
         self.assertTrue(os.path.exists(mp4_path))
@@ -288,12 +293,10 @@ class SubtitleAndRemuxTests(TempDirTestCase):
     @patch("kodi_nfo_fiddler.subprocess.run")
     def test_remux_mp4_accepts_mkvmerge_warnings(self, mock_run):
         mp4_path = os.path.join(self.test_dir, "Movie.mp4")
-        with open(mp4_path, "w") as file:
-            file.write("video")
+        _write(mp4_path, "video")
 
         def create_output(command, **kwargs):
-            with open(command[command.index("-o") + 1], "w") as output:
-                output.write("mkv")
+            _write(command[command.index("-o") + 1], "mkv")
             return MagicMock(returncode=1, stdout="Warning: odd timestamps", stderr="")
 
         mock_run.side_effect = create_output
@@ -542,7 +545,7 @@ class FilenameParsingTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_collect_metadata_reads_tracks_for_mkv_path_even_with_directory_name(self, mock_mkv):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
 
         metadata = collect_metadata("Mystery Movie (2024) BluRay", "folder/no_hit_x.mkv")
 
@@ -585,8 +588,7 @@ class ProcessDirectoryTests(TempDirTestCase):
         jpg_path = os.path.join(self.test_dir, "poster.JPG")
         keep_path = os.path.join(self.test_dir, "keep.png")
         for path in (video_path, txt_path, jpg_path, keep_path):
-            with open(path, "w") as file:
-                file.write("test")
+            _write(path, "test")
 
         process_directory(self.test_dir, is_root=True)
 
@@ -598,8 +600,7 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_skips_non_mkv_media(self, mock_tmdb):
         video_path = os.path.join(self.test_dir, "inception.avi")
-        with open(video_path, "w") as video_file:
-            video_file.write("test")
+        _write(video_path, "test")
 
         with patch('builtins.print') as mock_print:
             process_directory(self.test_dir, is_root=True)
@@ -612,8 +613,7 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch("kodi_nfo_fiddler.remux_mp4_to_mkv")
     def test_process_directory_does_not_remux_mp4_without_flag(self, mock_remux, mock_tmdb):
         video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
-        with open(video_path, "w") as video_file:
-            video_file.write("test")
+        _write(video_path, "test")
 
         process_directory(self.test_dir, is_root=True)
 
@@ -626,21 +626,14 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch("kodi_nfo_fiddler.subprocess.run")
     def test_process_directory_remuxes_mp4_before_organizing(self, mock_run, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "AAC",
-            "audio_channels": "2.0",
-            "english_subtitles": True,
-        }
+        mock_mkv.return_value = _mkv_info(audio_codec="AAC", audio_channels="2.0", english_subtitles=True)
         video_path = os.path.join(self.test_dir, "Inception.2010.BluRay.mp4")
         subtitle_path = os.path.join(self.test_dir, "Inception.2010.BluRay.en.srt")
         for path in (video_path, subtitle_path):
-            with open(path, "w") as file:
-                file.write("test")
+            _write(path, "test")
 
         def create_output(command, **kwargs):
-            with open(command[command.index("-o") + 1], "w") as output:
-                output.write("mkv")
+            _write(command[command.index("-o") + 1], "mkv")
             return MagicMock(returncode=0)
 
         mock_run.side_effect = create_output
@@ -660,16 +653,14 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb, mock_mkv):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         movie_dir = os.path.join(self.test_dir, "movie")
         os.makedirs(movie_dir)
         large_path = os.path.join(movie_dir, "inception.BluRay.mkv")
         small_path = os.path.join(movie_dir, "inception.BluRay-trailer.mkv")
-        with open(large_path, "wb") as video_file:
-            video_file.write(b"a" * 200)
-        with open(small_path, "wb") as video_file:
-            video_file.write(b"a" * 50)
+        _write(large_path, b"a" * 200)
+        _write(small_path, b"a" * 50)
 
         processed_dir = process_directory(movie_dir)
 
@@ -683,10 +674,9 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_keeps_smaller_videos_in_input_root(self, mock_tmdb, mock_mkv):
         mock_tmdb.side_effect = lambda title, year, *args: _movie(year, f"Film {year}", year)
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         for name, size in (("big.2010.BluRay.mkv", 200), ("small.2011.BluRay.mkv", 50)):
-            with open(os.path.join(self.test_dir, name), "wb") as video_file:
-                video_file.write(b"a" * size)
+            _write(os.path.join(self.test_dir, name), b"a" * size)
 
         process_directory(self.test_dir, is_root=True)
 
@@ -700,10 +690,8 @@ class ProcessDirectoryTests(TempDirTestCase):
         video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         featurettes_path = os.path.join(self.test_dir, "Featurettes")
         os.makedirs(featurettes_path)
-        with open(video_path, "w") as video_file:
-            video_file.write("test")
-        with open(os.path.join(featurettes_path, "behind_the_scenes.mp4"), "w") as featurette:
-            featurette.write("test")
+        _write(video_path, "test")
+        _write(os.path.join(featurettes_path, "behind_the_scenes.mp4"), "test")
 
         process_directory(self.test_dir, is_root=True)
 
@@ -715,13 +703,10 @@ class ProcessDirectoryTests(TempDirTestCase):
         video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         sample_file_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
         sample_folder_path = os.path.join(self.test_dir, "sample-footage")
-        with open(video_path, "w") as video_file:
-            video_file.write("test")
-        with open(sample_file_path, "w") as sample_file:
-            sample_file.write("test")
+        _write(video_path, "test")
+        _write(sample_file_path, "test")
         os.makedirs(sample_folder_path)
-        with open(os.path.join(sample_folder_path, "clip.mp4"), "w") as sample_clip:
-            sample_clip.write("test")
+        _write(os.path.join(sample_folder_path, "clip.mp4"), "test")
 
         process_directory(self.test_dir, is_root=True)
 
@@ -733,16 +718,10 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_warns_when_mkv_has_no_english_subtitles(self, mock_tmdb, mock_mkv):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "DTS",
-            "audio_channels": "5.1",
-            "english_subtitles": False
-        }
+        mock_mkv.return_value = _mkv_info(english_subtitles=False)
 
         video_path = os.path.join(self.test_dir, "inception.BluRay.mkv")
-        with open(video_path, "w") as video_file:
-            video_file.write("test")
+        _write(video_path, "test")
 
         with patch('builtins.print') as mock_print:
             process_directory(self.test_dir, is_root=True)
@@ -753,18 +732,13 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_single_file_renames_parent_folder(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "DTS",
-            "audio_channels": "5.1"
-        }
+        mock_mkv.return_value = _mkv_info()
 
         movie_folder = os.path.join(self.test_dir, "Inception_Raw_Folder")
         os.makedirs(movie_folder)
         video_file_path = os.path.join(movie_folder, "inception.BluRay.mkv")
 
-        with open(video_file_path, "w") as f:
-            f.write("fake video data")
+        _write(video_file_path, "fake video data")
 
         new_folder_path = process_directory(movie_folder)
 
@@ -784,16 +758,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_stores_original_directory_for_no_hit_retry(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = None
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "DTS",
-            "audio_channels": "5.1"
-        }
+        mock_mkv.return_value = _mkv_info()
 
         movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mystery.2024.mkv"), "w") as video_file:
-            video_file.write("fake video data")
+        _write(os.path.join(movie_folder, "mystery.2024.mkv"), "fake video data")
 
         no_hit_path = process_directory(movie_folder)
         nfo_path = next(
@@ -823,16 +792,11 @@ class ProcessDirectoryTests(TempDirTestCase):
             None,
             _movie("123", "Mystery Movie", "2024")
         ]
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "DTS",
-            "audio_channels": "5.1"
-        }
+        mock_mkv.return_value = _mkv_info()
 
         movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mystery.2024.mkv"), "w") as video_file:
-            video_file.write("fake video data")
+        _write(os.path.join(movie_folder, "mystery.2024.mkv"), "fake video data")
 
         no_hit_path = process_directory(movie_folder)
         recovered_path = process_directory(no_hit_path)
@@ -846,11 +810,10 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_skips_file_when_destination_exists(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
 
         for name, content in (("first.2010.BluRay.mkv", "first"), ("second.2010.BluRay.mkv", "second")):
-            with open(os.path.join(self.test_dir, name), "w") as video_file:
-                video_file.write(content)
+            _write(os.path.join(self.test_dir, name), content)
 
         process_directory(self.test_dir, is_root=True)
 
@@ -865,12 +828,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_uses_largest_video_in_subdirectory(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         movie_dir = os.path.join(self.test_dir, "Inception")
         os.makedirs(movie_dir)
         for name, size in (("a.2010.BluRay.mp4", 60), ("z.2010.BluRay.mkv", 150)):
-            with open(os.path.join(movie_dir, name), "wb") as video_file:
-                video_file.write(b"x" * size)
+            _write(os.path.join(movie_dir, name), b"x" * size)
 
         new_dir = process_directory(movie_dir)
 
@@ -884,8 +846,7 @@ class ProcessDirectoryTests(TempDirTestCase):
         movie_dir = os.path.join(self.test_dir, "Inception")
         os.makedirs(movie_dir)
         for name, size in (("a.2010.BluRay.mkv", 100), ("b.2010.BluRay.mkv", 150)):
-            with open(os.path.join(movie_dir, name), "wb") as video_file:
-                video_file.write(b"x" * size)
+            _write(os.path.join(movie_dir, name), b"x" * size)
 
         self.assertEqual(process_directory(movie_dir), movie_dir)
 
@@ -895,12 +856,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_skips_rename_when_a_tag_is_unknown(self, mock_mkv, mock_tmdb):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         movie_dir = os.path.join(self.test_dir, "Inception 2010")
         os.makedirs(movie_dir)
         video_path = os.path.join(movie_dir, "inception.mkv")
-        with open(video_path, "w") as video_file:
-            video_file.write("x")
+        _write(video_path, "x")
 
         result = process_directory(movie_dir)
 
@@ -912,12 +872,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_nfo_and_folder_use_tmdb_year_not_filename_year(self, mock_mkv, mock_tmdb):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         movie_dir = os.path.join(self.test_dir, "Inception 2009 BluRay")
         os.makedirs(movie_dir)
-        with open(os.path.join(movie_dir, "inception.2009.BluRay.mkv"), "w") as video_file:
-            video_file.write("x")
+        _write(os.path.join(movie_dir, "inception.2009.BluRay.mkv"), "x")
 
         new_dir = process_directory(movie_dir)
 
@@ -929,12 +888,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_skips_no_hit_without_year(self, mock_mkv, mock_tmdb):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         mock_tmdb.return_value = None
         movie_dir = os.path.join(self.test_dir, "Obscure Film")
         os.makedirs(movie_dir)
-        with open(os.path.join(movie_dir, "obscure.BluRay.mkv"), "w") as video_file:
-            video_file.write("y")
+        _write(os.path.join(movie_dir, "obscure.BluRay.mkv"), "y")
 
         self.assertEqual(process_directory(movie_dir), movie_dir)
 
@@ -943,12 +901,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_skips_hit_when_tmdb_has_no_release_year(self, mock_mkv, mock_tmdb):
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         mock_tmdb.return_value = _movie("27205", "Inception", "")
         movie_dir = os.path.join(self.test_dir, "Inception 2010")
         os.makedirs(movie_dir)
-        with open(os.path.join(movie_dir, "inception.2010.BluRay.mkv"), "w") as video_file:
-            video_file.write("x")
+        _write(os.path.join(movie_dir, "inception.2010.BluRay.mkv"), "x")
 
         self.assertEqual(process_directory(movie_dir), movie_dir)
 
@@ -958,16 +915,11 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_preserves_apostrophes_and_exclamation_marks(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("568", "Mission's: Impossible!", "1996")
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "DTS",
-            "audio_channels": "5.1"
-        }
+        mock_mkv.return_value = _mkv_info()
 
         movie_folder = os.path.join(self.test_dir, "Mission_Raw_Folder")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mission.BluRay.mkv"), "w") as video_file:
-            video_file.write("fake video data")
+        _write(os.path.join(movie_folder, "mission.BluRay.mkv"), "fake video data")
 
         new_folder_path = process_directory(movie_folder)
 
@@ -988,22 +940,17 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_uses_source_from_movie_folder(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("278", "The Chronicles of Riddick", "2004")
-        mock_mkv.return_value = {
-            "resolution": "1080p",
-            "audio_codec": "AAC",
-            "audio_channels": "5.1"
-        }
+        mock_mkv.return_value = _mkv_info(audio_codec="AAC")
 
         movie_folder = os.path.join(
             self.test_dir,
             "The Chronicles of Riddick (2004) DC (1080p BluRay x265 HEVC 10bit AAC 5.1 Tigole)"
         )
         os.makedirs(movie_folder)
-        with open(
+        _write(
             os.path.join(movie_folder, "The Chronicles of Riddick (2004) DC (1080p x265 10bit Tigole).mkv"),
-            "w"
-        ) as video_file:
-            video_file.write("fake video data")
+            "fake video data"
+        )
 
         new_folder_path = process_directory(movie_folder)
 
@@ -1016,10 +963,9 @@ class ProcessDirectoryTests(TempDirTestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_warns_and_continues_when_rename_fails(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_mkv.return_value = _mkv_info()
         video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
-        with open(video_path, "w") as video_file:
-            video_file.write("x")
+        _write(video_path, "x")
 
         with patch("kodi_nfo_fiddler.os.rename", side_effect=OSError("denied")):
             process_directory(self.test_dir, is_root=True)
