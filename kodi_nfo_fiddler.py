@@ -12,7 +12,7 @@ import re
 import shutil
 import json
 import subprocess
-import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 import requests
@@ -97,26 +97,15 @@ def find_sidecar_subtitles(video_path):
 def remux_mp4_to_mkv(mp4_path):
     """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
     subtitles = find_sidecar_subtitles(mp4_path)
-    english_subtitles = subtitles["en"]
-    swedish_subtitles = subtitles["sv"]
-    file_descriptor, output_path = tempfile.mkstemp(
-        prefix=".kodi_nfo_fiddler_",
-        suffix=".mkv",
-        dir=os.path.dirname(mp4_path),
-    )
-    os.close(file_descriptor)
-    os.remove(output_path)
+    output_path = os.path.join(os.path.dirname(mp4_path), f".kodi_nfo_fiddler_{uuid.uuid4().hex}.mkv")
 
     command = ["mkvmerge", "-o", output_path, mp4_path]
-    ordered_subtitles = [
-        *((path, "eng") for path in english_subtitles),
-        *((path, "swe") for path in swedish_subtitles),
-    ]
+    # English first; the first subtitle track overall is the default
+    ordered_subtitles = [(path, "eng") for path in subtitles["en"]] + [(path, "swe") for path in subtitles["sv"]]
     for index, (subtitle_path, language) in enumerate(ordered_subtitles):
-        is_default = index == 0
         command.extend([
             "--language", f"0:{language}",
-            "--default-track-flag", f"0:{'yes' if is_default else 'no'}",
+            "--default-track-flag", f"0:{'yes' if index == 0 else 'no'}",
             subtitle_path,
         ])
 
@@ -128,16 +117,17 @@ def remux_mp4_to_mkv(mp4_path):
             text=True,
             check=True,
         )
-        if not os.path.isfile(output_path):
-            raise RuntimeError("mkvmerge completed without creating an output file")
-        os.remove(mp4_path)
-        return output_path
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        details = getattr(error, "stderr", None)
-        print_warning(f"[!] Failed to convert '{os.path.basename(mp4_path)}' to MKV: {details or error}")
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        return None
+        if os.path.isfile(output_path):
+            os.remove(mp4_path)
+            return output_path
+        error_details = "mkvmerge completed without creating an output file"
+    except (OSError, subprocess.CalledProcessError) as error:
+        error_details = getattr(error, "stderr", None) or error
+
+    print_warning(f"[!] Failed to convert '{os.path.basename(mp4_path)}' to MKV: {error_details}")
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    return None
 
 
 def classify_resolution(width, height):
@@ -343,7 +333,8 @@ def get_video_files(directory):
     """Returns a list of video files in the given directory (non-recursive)."""
     try:
         return [f for f in os.listdir(directory) if f.lower().endswith(MEDIA_EXTENSIONS) and os.path.isfile(os.path.join(directory, f))]
-    except Exception:
+    except OSError as e:
+        print_warning(f"[!] Could not list '{directory}': {e}")
         return []
 
 def remove_smaller_video_files(directory):
@@ -374,8 +365,8 @@ def remove_unwanted_files(directory):
             file_path = os.path.join(directory, filename)
             if filename.lower().endswith(REMOVE_EXTENSIONS) and os.path.isfile(file_path):
                 os.remove(file_path)
-    except Exception:
-        pass
+    except OSError as e:
+        print_warning(f"[!] Could not remove unwanted files in '{directory}': {e}")
 
 def remove_featurettes_folder(directory):
     """Removes a Featurettes folder from the given movie directory."""
@@ -383,8 +374,8 @@ def remove_featurettes_folder(directory):
     try:
         if os.path.isdir(featurettes_path):
             shutil.rmtree(featurettes_path)
-    except Exception:
-        pass
+    except OSError as e:
+        print_warning(f"[!] Could not remove '{featurettes_path}': {e}")
 
 def remove_sample_entries(directory):
     """Removes files or folders starting with sample from the given movie directory."""
@@ -398,8 +389,8 @@ def remove_sample_entries(directory):
                 shutil.rmtree(sample_path)
             elif os.path.isfile(sample_path):
                 os.remove(sample_path)
-    except Exception:
-        pass
+    except OSError as e:
+        print_warning(f"[!] Could not remove sample files in '{directory}': {e}")
 
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
@@ -550,18 +541,22 @@ def tmdb_get(path, params=None):
     response.raise_for_status()
     return response.json()
 
+def _movie_details(data, imdb_id=None):
+    return {
+        "tmdb_id": data["id"],
+        "title": data["title"],
+        "year": (data.get("release_date") or "")[:4],
+        "imdb_id": imdb_id or data.get("imdb_id"),
+    }
+
 def lookup_tmdb_by_imdb_id(imdb_id):
-    """Returns (tmdb_id, title, year) for an IMDB id, or None if TMDB has no movie for it."""
+    """Returns a movie details dict (tmdb_id, title, year, imdb_id) for an IMDB id, or None if TMDB has no match."""
     results = tmdb_get(f"/find/{imdb_id}", {"external_source": "imdb_id"}).get("movie_results", [])
-    if not results:
-        return None
-    hit = results[0]
-    return hit["id"], hit["title"], (hit.get("release_date") or "")[:4]
+    return _movie_details(results[0], imdb_id) if results else None
 
 def lookup_tmdb_by_id(tmdb_id):
-    """Returns (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
-    data = tmdb_get(f"/movie/{tmdb_id}")
-    return data["id"], data["title"], (data.get("release_date") or "")[:4], data.get("imdb_id")
+    """Returns a movie details dict (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
+    return _movie_details(tmdb_get(f"/movie/{tmdb_id}"))
 
 def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filename=None, original_directory=None):
     """
@@ -690,21 +685,19 @@ def upgrade_nfo_file(path):
 
     try:
         if tmdb_match:
-            tmdb_id, title, year, imdb_id = lookup_tmdb_by_id(tmdb_match.group(1))
-            imdb_id = imdb_id or (imdb_match.group(1) if imdb_match else None)
+            movie = lookup_tmdb_by_id(tmdb_match.group(1))
+            movie["imdb_id"] = movie["imdb_id"] or (imdb_match.group(1) if imdb_match else None)
         else:
-            imdb_id = imdb_match.group(1)
-            hit = lookup_tmdb_by_imdb_id(imdb_id)
-            if hit is None:
-                print_warning(f"[!] No TMDB movie found for {imdb_id} in '{path}'. Leaving it unchanged.")
+            movie = lookup_tmdb_by_imdb_id(imdb_match.group(1))
+            if movie is None:
+                print_warning(f"[!] No TMDB movie found for {imdb_match.group(1)} in '{path}'. Leaving it unchanged.")
                 return "failed"
-            tmdb_id, title, year = hit
-        write_kodi_nfo(path, title, year, tmdb_id=tmdb_id, imdb_id=imdb_id)
+        write_kodi_nfo(path, movie["title"], movie["year"], tmdb_id=movie["tmdb_id"], imdb_id=movie["imdb_id"])
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
         print_warning(f"[!] Failed to upgrade '{path}': {e}")
         return "failed"
 
-    print(f"[+] Upgraded NFO: {path} -> TMDB {tmdb_id} ({title})")
+    print(f"[+] Upgraded NFO: {path} -> TMDB {movie['tmdb_id']} ({movie['title']})")
     return "upgraded"
 
 def upgrade_nfo_files(directory):
