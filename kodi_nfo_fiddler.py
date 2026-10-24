@@ -49,6 +49,12 @@ def print_warning(message):
     print(message)
 
 
+def is_language(language_tag, language):
+    """True if a language tag (e.g. "eng", "en-US", "english") is one of the aliases for the language key."""
+    primary_subtag = language_tag.casefold().split("-")[0]
+    return primary_subtag in SUBTITLE_LANGUAGES[language]
+
+
 def find_sidecar_subtitles(video_path):
     """Find language-tagged subtitle files whose names match the video basename."""
     directory = os.path.dirname(video_path)
@@ -145,9 +151,8 @@ def get_mkv_metadata(filepath):
             properties = track.get("properties", {})
 
             if track_type == "subtitles":
-                language = properties.get("language_ietf") or properties.get("language", "")
-                normalized_language = language.lower()
-                if normalized_language in ("english", "eng", "en") or normalized_language.startswith("en-"):
+                language_tag = properties.get("language_ietf") or properties.get("language", "")
+                if is_language(language_tag, "en"):
                     english_subtitles = True
 
             # Extract Video Info (Direct integer targeting for reliability)
@@ -286,6 +291,13 @@ def search_tmdb(title, year):
 
     return None
 
+def detect_source(text):
+    """Returns the normalized source (e.g. BluRay, WEBRip) named in the text, or None."""
+    for source in SOURCE_KEYWORDS:
+        if re.search(r'\b' + re.escape(source) + r'\b', text, re.IGNORECASE):
+            return SOURCE_NORMALIZATIONS.get(source, source)
+    return None
+
 def parse_filename(filename, file_path):
     """
     Cleans up complex release group filenames to extract a pristine
@@ -327,19 +339,10 @@ def parse_filename(filename, file_path):
     title_part = re.sub(r'\s+', ' ', title_part).strip()     # Normalize spaces
     metadata["title"] = title_part
 
-    # Deduce Source out of raw string before returning (fallback for non-MKVs)
-    for src in SOURCE_KEYWORDS:
-        if re.search(r'\b' + re.escape(src) + r'\b', clean_name, re.IGNORECASE):
-            metadata["source"] = SOURCE_NORMALIZATIONS.get(src, src)
-            break
-
+    # Deduce Source out of raw string before returning (fallback for non-MKVs).
     # Some release layouts keep the source tag only in the parent directory name.
-    if metadata["source"] == "Unknown Source":
-        parent_name = os.path.basename(os.path.dirname(file_path))
-        for src in SOURCE_KEYWORDS:
-            if re.search(r'\b' + re.escape(src) + r'\b', parent_name, re.IGNORECASE):
-                metadata["source"] = SOURCE_NORMALIZATIONS.get(src, src)
-                break
+    parent_name = os.path.basename(os.path.dirname(file_path))
+    metadata["source"] = detect_source(clean_name) or detect_source(parent_name) or "Unknown Source"
 
     # If the file is an MKV, populate pristine technical parameters directly from the tracks
     if filename.lower().endswith('.mkv'):

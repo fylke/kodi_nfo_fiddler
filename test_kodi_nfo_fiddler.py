@@ -15,6 +15,8 @@ from kodi_nfo_fiddler import (
     process_directory,
     print_warning,
     find_sidecar_subtitles,
+    is_language,
+    detect_source,
     remux_mp4_to_mkv,
     upgrade_nfo_file,
     upgrade_nfo_files,
@@ -189,6 +191,19 @@ class TestMovieOrganizer(unittest.TestCase):
 
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertNotIn("\033[", output)
+
+    def test_is_language_matches_tags_and_regional_variants(self):
+        for tag in ("en", "eng", "English", "en-US", "EN-gb"):
+            self.assertTrue(is_language(tag, "en"), tag)
+        for tag in ("sv", "swe", "sv-SE"):
+            self.assertTrue(is_language(tag, "sv"), tag)
+        for tag in ("", "fra", "und", "enm"):
+            self.assertFalse(is_language(tag, "en"), tag)
+
+    def test_detect_source_normalizes_and_returns_none_when_missing(self):
+        self.assertEqual(detect_source("Movie 2024 1080p WEB-DL"), "WEBRip")
+        self.assertEqual(detect_source("movie bdrip x264"), "BluRay")
+        self.assertIsNone(detect_source("Movie 2024 1080p"))
 
     def test_find_sidecar_subtitles_matches_video_basename_and_languages(self):
         video_path = os.path.join(self.test_dir, "Movie.2024.mp4")
