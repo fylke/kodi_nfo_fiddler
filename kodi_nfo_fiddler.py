@@ -413,14 +413,13 @@ def resolve_naming(metadata):
     Looks the movie up on TMDB and returns (tmdb_id, nfo_title, folder_title, year).
     A miss keeps the parsed title and prefixes the folder title with no_hit_.
     """
-    search_result = search_tmdb(metadata['title'], metadata['year'])
-    if search_result is None:
+    movie = search_tmdb(metadata['title'], metadata['year'])
+    if movie is None:
         print_warning(f"No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
         return None, metadata['title'], f"no_hit_{metadata['title']}", metadata['year']
 
     # Use the official TMDB title and release year for naming
-    tmdb_url, title, year = search_result
-    return tmdb_url.split('/')[-1], title, title, year
+    return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or "####"
 
 def build_new_name(metadata, folder_title, year):
     """Builds the clean Title_(Year)_(resolution_source_codec_channels) name."""
@@ -533,14 +532,10 @@ def lookup_tmdb_by_id(tmdb_id):
     """Returns a movie details dict (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
     return _movie_details(tmdb_get(f"/movie/{tmdb_id}"))
 
-def _as_result(hit):
-    """Converts a TMDB search hit into (tmdb_url, title, year)."""
-    return f"{TMDB_MOVIE_BASE_URL}{hit['id']}", hit["title"], (hit.get("release_date") or "####")[:4]
-
 def search_tmdb(title, year):
     """
-    Searches TMDB for a movie title. If a strict year search fails,
-    it falls back to a broad text search to match web behavior.
+    Searches TMDB for a movie title and returns a movie details dict (see _movie_details),
+    or None. If a strict year search fails, it falls back to a broad text search to match web behavior.
     """
     has_year = bool(year) and year != "Unknown Year"
 
@@ -561,7 +556,7 @@ def search_tmdb(title, year):
 
         # If Tier 1 found matches, return the top hit
         if results:
-            return _as_result(results[0])
+            return _movie_details(results[0])
 
         # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
         if has_year:
@@ -578,11 +573,11 @@ def search_tmdb(title, year):
 
                     # Allow a +/- 1 year tolerance window for international premieres
                     if abs(hit_year - target_year) <= 1:
-                        return _as_result(hit)
+                        return _movie_details(hit)
 
             # Last resort: no hit was within a year of the target, so take the top result
             if results:
-                return _as_result(results[0])
+                return _movie_details(results[0])
 
     except Exception as e:
         print(f"[-] Network error querying TMDB: {e}")

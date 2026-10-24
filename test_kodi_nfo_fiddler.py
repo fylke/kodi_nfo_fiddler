@@ -24,6 +24,9 @@ from kodi_nfo_fiddler import (
     upgrade_nfo_files,
 )
 
+def _movie(tmdb_id, title, year):
+    return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": None}
+
 class TestMovieOrganizer(unittest.TestCase):
 
     def setUp(self):
@@ -392,7 +395,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
         video_path = os.path.join(self.test_dir, "inception.mp4")
         txt_path = os.path.join(self.test_dir, "notes.TXT")
@@ -437,7 +440,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch("kodi_nfo_fiddler.get_mkv_metadata")
     @patch("kodi_nfo_fiddler.subprocess.run")
     def test_process_directory_remuxes_mp4_before_organizing(self, mock_run, mock_mkv, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "AAC",
@@ -471,7 +474,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         movie_dir = os.path.join(self.test_dir, "movie")
         os.makedirs(movie_dir)
         large_path = os.path.join(movie_dir, "inception.mkv")
@@ -492,7 +495,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_keeps_smaller_videos_in_input_root(self, mock_tmdb, mock_mkv):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "DTS",
@@ -519,7 +522,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_featurettes_folder(self, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
         video_path = os.path.join(self.test_dir, "inception.mp4")
         featurettes_path = os.path.join(self.test_dir, "Featurettes")
@@ -535,7 +538,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_sample_file_and_folder(self, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
         video_path = os.path.join(self.test_dir, "inception.mp4")
         sample_file_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
@@ -556,7 +559,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_warns_when_mkv_has_no_english_subtitles(self, mock_tmdb, mock_mkv):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "DTS",
@@ -576,7 +579,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_single_file_renames_parent_folder(self, mock_mkv, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "DTS",
@@ -645,7 +648,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_process_directory_retries_no_hit_using_original_directory(self, mock_mkv, mock_tmdb):
         mock_tmdb.side_effect = [
             None,
-            ("https://www.themoviedb.org/movie/123", "Mystery Movie", "2024")
+            _movie("123", "Mystery Movie", "2024")
         ]
         mock_mkv.return_value = {
             "resolution": "1080p",
@@ -668,11 +671,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_preserves_apostrophes_and_exclamation_marks(self, mock_mkv, mock_tmdb):
-        mock_tmdb.return_value = (
-            "https://www.themoviedb.org/movie/568",
-            "Mission's: Impossible!",
-            "1996"
-        )
+        mock_tmdb.return_value = _movie("568", "Mission's: Impossible!", "1996")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "DTS",
@@ -702,7 +701,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_uses_source_from_movie_folder(self, mock_mkv, mock_tmdb):
-        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/278", "The Chronicles of Riddick", "2004")
+        mock_tmdb.return_value = _movie("278", "The Chronicles of Riddick", "2004")
         mock_mkv.return_value = {
             "resolution": "1080p",
             "audio_codec": "Unknown Codec",
@@ -810,10 +809,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         result = search_tmdb("Earwig and the Witch", "2020")
 
-        self.assertEqual(
-            result,
-            ("https://www.themoviedb.org/movie/683127", "Earwig and the Witch", "2021")
-        )
+        self.assertEqual(result, _movie(683127, "Earwig and the Witch", "2021"))
         fallback_params = mock_get.call_args_list[1].kwargs["params"]
         self.assertNotIn("year", fallback_params)
         self.assertNotIn("primary_release_year", fallback_params)
@@ -826,7 +822,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         result = search_tmdb("Inception", "Unknown Year")
 
-        self.assertEqual(result, ("https://www.themoviedb.org/movie/27205", "Inception", "2010"))
+        self.assertEqual(result, _movie(27205, "Inception", "2010"))
         params = mock_get.call_args.kwargs["params"]
         self.assertNotIn("year", params)
         self.assertNotIn("primary_release_year", params)
