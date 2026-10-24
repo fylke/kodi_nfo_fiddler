@@ -50,12 +50,16 @@ SUBTITLE_LANGUAGES = {
 AUDIO_CODEC_NAMES = [
     (("DTS-HD",), "DTS-HD"),
     (("DTS",), "DTS"),
-    (("TRUEHD", "ATMOS"), "TrueHD"),
     (("EAC3", "E-AC-3"), "E-AC3"),
+    (("TRUEHD", "ATMOS"), "TrueHD"),
     (("AC3", "AC-3"), "AC3"),
     (("AAC",), "AAC"),
     (("OPUS",), "Opus"),
     (("FLAC",), "FLAC"),
+    (("VORBIS",), "Vorbis"),
+    (("MP3",), "MP3"),
+    (("MP2",), "MP2"),
+    (("PCM",), "PCM"),
 ]
 AUDIO_CHANNEL_LAYOUTS = {8: "7.1", 6: "5.1", 2: "2.0", 1: "1.0"}
 

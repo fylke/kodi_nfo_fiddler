@@ -210,7 +210,13 @@ class TestMovieOrganizer(unittest.TestCase):
             ("A_EAC3", 8, ("E-AC3", "7.1")),
             ("A_AC3", 2, ("AC3", "2.0")),
             ("A_TRUEHD", 10, ("TrueHD", "10.0")),
-            ("A_VORBIS", None, ("VORBIS", "Unknown Channels")),
+            ("A_VORBIS", 2, ("Vorbis", "2.0")),
+            ("MP3", 2, ("MP3", "2.0")),
+            ("MP2", 2, ("MP2", "2.0")),
+            ("PCM", 2, ("PCM", "2.0")),
+            ("E-AC-3 Atmos", 6, ("E-AC3", "5.1")),
+            ("TrueHD Atmos", 8, ("TrueHD", "7.1")),
+            ("A_WAVPACK4", None, ("WAVPACK4", "Unknown Channels")),
         )
         for codec, channels, expected in cases:
             with self.subTest(codec=codec):
