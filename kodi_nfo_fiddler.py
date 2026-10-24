@@ -50,6 +50,10 @@ AUDIO_CODEC_NAMES = [
 AUDIO_CHANNEL_LAYOUTS = {8: "7.1", 6: "5.1", 2: "2.0", 1: "1.0"}
 
 
+# ---------------------------------------------------------------------------
+# Console output
+# ---------------------------------------------------------------------------
+
 def print_warning(message):
     """Print a "[!]"-prefixed warning, in yellow when stdout is an interactive terminal."""
     message = f"[!] {message}"
@@ -57,6 +61,11 @@ def print_warning(message):
         message = f"\033[33m{message}\033[0m"
     print(message)
 
+
+
+# ---------------------------------------------------------------------------
+# Subtitles and MP4 remuxing
+# ---------------------------------------------------------------------------
 
 def is_language(language_tag, language):
     """True if a language tag (e.g. "eng", "en-US", "english") is one of the aliases for the language key."""
@@ -126,6 +135,11 @@ def remux_mp4_to_mkv(mp4_path):
         os.remove(output_path)
     return None
 
+
+
+# ---------------------------------------------------------------------------
+# MKV metadata
+# ---------------------------------------------------------------------------
 
 def classify_resolution(width, height):
     """Buckets pixel dimensions into a resolution label (tolerant of cropped widescreen encodes)."""
@@ -209,61 +223,10 @@ def get_mkv_metadata(filepath):
         "english_subtitles": english_subtitles
     }
 
-def _as_result(hit):
-    """Converts a TMDB search hit into (tmdb_url, title, year)."""
-    return f"{TMDB_MOVIE_BASE_URL}{hit['id']}", hit["title"], (hit.get("release_date") or "####")[:4]
 
-def search_tmdb(title, year):
-    """
-    Searches TMDB for a movie title. If a strict year search fails,
-    it falls back to a broad text search to match web behavior.
-    """
-    has_year = bool(year) and year != "Unknown Year"
-
-    # Tier 1: Strict API Search (Title + Exact Year Filter)
-    params = {
-        "query": title,
-        "include_adult": "false",
-        "language": "en-US",
-        "page": 1
-    }
-
-    if has_year:
-        params["year"] = year
-        params["primary_release_year"] = year
-
-    try:
-        results = tmdb_get("/search/movie", params).get("results", [])
-
-        # If Tier 1 found matches, return the top hit
-        if results:
-            return _as_result(results[0])
-
-        # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
-        if has_year:
-            print_warning(f"Strict year match failed for '{title}' ({year}). Trying broad search...")
-            broad_params = {k: v for k, v in params.items() if k not in ("year", "primary_release_year")}
-            results = tmdb_get("/search/movie", broad_params).get("results", [])
-
-            # Scan results manually to find a close match within a 1-year variance window
-            for hit in results:
-                release_date = hit.get("release_date", "")
-                if release_date:
-                    hit_year = int(release_date[:4])
-                    target_year = int(year)
-
-                    # Allow a +/- 1 year tolerance window for international premieres
-                    if abs(hit_year - target_year) <= 1:
-                        return _as_result(hit)
-
-            # Last resort: no hit was within a year of the target, so take the top result
-            if results:
-                return _as_result(results[0])
-
-    except Exception as e:
-        print(f"[-] Network error querying TMDB: {e}")
-
-    return None
+# ---------------------------------------------------------------------------
+# Filename parsing
+# ---------------------------------------------------------------------------
 
 def detect_source(text):
     """Returns the normalized source (e.g. BluRay, WEBRip) named in the text, or None."""
@@ -325,6 +288,11 @@ def parse_filename(filename, file_path):
             metadata.update(mkv_meta)
 
     return metadata
+
+
+# ---------------------------------------------------------------------------
+# Folder cleanup and naming helpers
+# ---------------------------------------------------------------------------
 
 def get_video_files(directory):
     """Returns a list of video files in the given directory (non-recursive)."""
@@ -410,6 +378,11 @@ def get_original_directory(directory_path):
             continue
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Organizing videos
+# ---------------------------------------------------------------------------
 
 def clean_directory(directory_path, is_root):
     """Removes junk files, featurettes, samples and (outside the root) smaller duplicate videos."""
@@ -527,6 +500,11 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
 
     return None if is_root else directory_path
 
+
+# ---------------------------------------------------------------------------
+# TMDB client
+# ---------------------------------------------------------------------------
+
 def tmdb_get(path, params=None):
     """Performs an authenticated TMDB API GET request and returns the decoded JSON."""
     response = requests.get(
@@ -554,6 +532,84 @@ def lookup_tmdb_by_imdb_id(imdb_id):
 def lookup_tmdb_by_id(tmdb_id):
     """Returns a movie details dict (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
     return _movie_details(tmdb_get(f"/movie/{tmdb_id}"))
+
+def _as_result(hit):
+    """Converts a TMDB search hit into (tmdb_url, title, year)."""
+    return f"{TMDB_MOVIE_BASE_URL}{hit['id']}", hit["title"], (hit.get("release_date") or "####")[:4]
+
+def search_tmdb(title, year):
+    """
+    Searches TMDB for a movie title. If a strict year search fails,
+    it falls back to a broad text search to match web behavior.
+    """
+    has_year = bool(year) and year != "Unknown Year"
+
+    # Tier 1: Strict API Search (Title + Exact Year Filter)
+    params = {
+        "query": title,
+        "include_adult": "false",
+        "language": "en-US",
+        "page": 1
+    }
+
+    if has_year:
+        params["year"] = year
+        params["primary_release_year"] = year
+
+    try:
+        results = tmdb_get("/search/movie", params).get("results", [])
+
+        # If Tier 1 found matches, return the top hit
+        if results:
+            return _as_result(results[0])
+
+        # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
+        if has_year:
+            print_warning(f"Strict year match failed for '{title}' ({year}). Trying broad search...")
+            broad_params = {k: v for k, v in params.items() if k not in ("year", "primary_release_year")}
+            results = tmdb_get("/search/movie", broad_params).get("results", [])
+
+            # Scan results manually to find a close match within a 1-year variance window
+            for hit in results:
+                release_date = hit.get("release_date", "")
+                if release_date:
+                    hit_year = int(release_date[:4])
+                    target_year = int(year)
+
+                    # Allow a +/- 1 year tolerance window for international premieres
+                    if abs(hit_year - target_year) <= 1:
+                        return _as_result(hit)
+
+            # Last resort: no hit was within a year of the target, so take the top result
+            if results:
+                return _as_result(results[0])
+
+    except Exception as e:
+        print(f"[-] Network error querying TMDB: {e}")
+
+    return None
+
+def lookup_tmdb_tv_by_external_id(external_id, source):
+    """Returns the TMDB tv id for an IMDB or TVDB id (source: imdb_id or tvdb_id), or None."""
+    results = tmdb_get(f"/find/{external_id}", {"external_source": source}).get("tv_results", [])
+    return results[0]["id"] if results else None
+
+def lookup_tmdb_tv(tmdb_id):
+    """Returns TV show details including TVDB/IMDB ids from TMDB."""
+    data = tmdb_get(f"/tv/{tmdb_id}", {"append_to_response": "external_ids"})
+    external_ids = data.get("external_ids") or {}
+    return {
+        "tmdb_id": data["id"],
+        "title": data["name"],
+        "year": (data.get("first_air_date") or "")[:4],
+        "tvdb_id": external_ids.get("tvdb_id"),
+        "imdb_id": external_ids.get("imdb_id"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# NFO writing
+# ---------------------------------------------------------------------------
 
 def write_nfo_xml(path, root_tag, fields):
     """Writes an NFO whose root has one child per (tag, text, attributes) field."""
@@ -585,23 +641,6 @@ def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filen
     fields.append(("kodi_nfo_url", f"{TMDB_MOVIE_BASE_URL}{tmdb_id}" if tmdb_id else "", {}))
     write_nfo_xml(path, "movie", fields)
 
-def lookup_tmdb_tv_by_external_id(external_id, source):
-    """Returns the TMDB tv id for an IMDB or TVDB id (source: imdb_id or tvdb_id), or None."""
-    results = tmdb_get(f"/find/{external_id}", {"external_source": source}).get("tv_results", [])
-    return results[0]["id"] if results else None
-
-def lookup_tmdb_tv(tmdb_id):
-    """Returns TV show details including TVDB/IMDB ids from TMDB."""
-    data = tmdb_get(f"/tv/{tmdb_id}", {"append_to_response": "external_ids"})
-    external_ids = data.get("external_ids") or {}
-    return {
-        "tmdb_id": data["id"],
-        "title": data["name"],
-        "year": (data.get("first_air_date") or "")[:4],
-        "tvdb_id": external_ids.get("tvdb_id"),
-        "imdb_id": external_ids.get("imdb_id"),
-    }
-
 def write_kodi_tvshow_nfo(path, show):
     """Writes a Kodi tvshow NFO. TVDB is the default id (Kodi's default TV scraper) when known."""
     fields = []
@@ -614,6 +653,11 @@ def write_kodi_tvshow_nfo(path, show):
         attributes = {"type": id_type, **({"default": "true"} if index == 0 else {})}
         fields.append(("uniqueid", value, attributes))
     write_nfo_xml(path, "tvshow", fields)
+
+
+# ---------------------------------------------------------------------------
+# Legacy NFO upgrade (--upgrade-nfo)
+# ---------------------------------------------------------------------------
 
 def upgrade_tvshow_nfo(path, text):
     """Upgrades a plain-text tvshow.nfo link. Returns "upgraded", "skipped" or "failed"."""
@@ -707,6 +751,11 @@ def upgrade_nfo_files(directory):
 
     print(f"NFO upgrade complete: {counts['upgraded']} upgraded, {counts['skipped']} skipped, {counts['failed']} failed")
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
 
 def main():
     if not TMDB_READ_TOKEN:
