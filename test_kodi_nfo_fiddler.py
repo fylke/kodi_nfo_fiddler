@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 
 from kodi_nfo_fiddler import (
     get_mkv_metadata,
+    collect_metadata,
     parse_filename,
     sanitize_folder_name,
     build_new_name,
@@ -411,9 +412,9 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(sanitized, expected)
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_parse_filename_strict_fallback_when_not_mkv(self, mock_mkv):
+    def test_collect_metadata_strict_fallback_when_not_mkv(self, mock_mkv):
         """Ensure non-MKV files only parse Title, Year, and Source, defaulting technical meta."""
-        metadata = parse_filename("Inception.2010.1080p.BluRay.DTS.5.1.mp4", "dummy_path.mp4")
+        metadata = collect_metadata("Inception.2010.1080p.BluRay.DTS.5.1.mp4", "dummy_path.mp4")
 
         mock_mkv.assert_not_called()
         self.assertEqual(metadata["title"], "Inception")
@@ -424,8 +425,7 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["audio_codec"], "Unknown Codec")
         self.assertEqual(metadata["audio_channels"], "Unknown Channels")
 
-    @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_parse_filename_ignores_no_hit_prefix(self, mock_mkv):
+    def test_parse_filename_ignores_no_hit_prefix(self):
         metadata = parse_filename(
             "no_hit_Inception.2010.1080p.BluRay.mp4",
             "no_hit_Inception.2010.1080p.BluRay.mp4"
@@ -434,8 +434,7 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["title"], "Inception")
         self.assertEqual(metadata["year"], "2010")
 
-    @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_parse_filename_normalizes_web_sources(self, mock_mkv):
+    def test_parse_filename_normalizes_web_sources(self):
         for source in ("WEB-DL", "WEB", "WEBRip"):
             with self.subTest(source=source):
                 metadata = parse_filename(
@@ -444,7 +443,15 @@ class TestMovieOrganizer(unittest.TestCase):
                 )
                 self.assertEqual(metadata["source"], "WEBRip")
 
-        mock_mkv.assert_called()
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_collect_metadata_reads_tracks_for_mkv_path_even_with_directory_name(self, mock_mkv):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+
+        metadata = collect_metadata("Mystery Movie (2024) BluRay", "folder/no_hit_x.mkv")
+
+        mock_mkv.assert_called_once_with("folder/no_hit_x.mkv")
+        self.assertEqual(metadata["resolution"], "1080p")
+        self.assertEqual(metadata["title"], "Mystery Movie")
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):

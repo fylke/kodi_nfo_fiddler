@@ -197,8 +197,8 @@ def describe_audio(track):
         return codec, "Unknown Channels", has_atmos
     return codec, AUDIO_CHANNEL_LAYOUTS.get(channels, f"{channels}.0"), has_atmos
 
-def get_mkv_metadata(filepath):
-    """Attempts to read MKV technical metadata using mkvmerge -J."""
+def read_mkv_tracks(filepath):
+    """Runs mkvmerge -J and returns the track list, or None if it could not be read."""
     try:
         result = subprocess.run(
             ["mkvmerge", "-J", filepath],
@@ -207,9 +207,15 @@ def get_mkv_metadata(filepath):
             text=True,
             check=True
         )
-        tracks = json.loads(result.stdout).get("tracks", [])
+        return json.loads(result.stdout).get("tracks", [])
     except (OSError, subprocess.CalledProcessError, ValueError) as e:
         print_warning(f"Could not read MKV metadata for '{os.path.basename(filepath)}': {e}")
+        return None
+
+def get_mkv_metadata(filepath):
+    """Summarizes an MKV's tracks as resolution, audio and English subtitle info, or None if unreadable."""
+    tracks = read_mkv_tracks(filepath)
+    if tracks is None:
         return None
 
     resolution = "Unknown Resolution"
@@ -255,17 +261,13 @@ def detect_source(text):
 def parse_filename(filename, file_path):
     """
     Cleans up complex release group filenames to extract a pristine
-    Title and Year for TMDB API optimization.
+    Title and Year for TMDB API optimization, plus the source tag.
+    Reads no files; the parent folder name of file_path is only used as a source hint.
     """
-    # Technical metadata defaults (Will be overwritten if it's an MKV)
     metadata = {
         "title": "Unknown Title",
         "year": "Unknown Year",
-        "resolution": "Unknown Resolution",
         "source": "Unknown Source",
-        "audio_codec": "Unknown Codec",
-        "audio_channels": "Unknown Channels",
-        "audio_atmos": False
     }
 
     # Strip extension
@@ -298,14 +300,24 @@ def parse_filename(filename, file_path):
     # Some release layouts keep the source tag only in the parent directory name.
     parent_name = os.path.basename(os.path.dirname(file_path))
     metadata["source"] = detect_source(clean_name) or detect_source(parent_name) or "Unknown Source"
+    return metadata
 
-    # If the file is an MKV, populate pristine technical parameters directly from the tracks.
-    # Check the real path: `filename` may be a stored directory name when retrying a no-hit.
+def collect_metadata(name, file_path):
+    """
+    Combines the name-derived metadata with technical details read from the file.
+    `name` may be a stored directory name when retrying a no-hit, so MKV detection uses the real path.
+    """
+    metadata = parse_filename(name, file_path)
+    metadata.update({
+        "resolution": "Unknown Resolution",
+        "audio_codec": "Unknown Codec",
+        "audio_channels": "Unknown Channels",
+        "audio_atmos": False,
+    })
     if file_path.lower().endswith('.mkv'):
         mkv_meta = get_mkv_metadata(file_path)
         if mkv_meta:
             metadata.update(mkv_meta)
-
     return metadata
 
 
@@ -507,7 +519,7 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         print(f" -> Processing file: {filename}")
 
         # Prefer the original directory metadata when retrying a previous no-hit.
-        metadata = parse_filename(stored_directory or filename, file_path)
+        metadata = collect_metadata(stored_directory or filename, file_path)
         if not metadata.get("english_subtitles", False):
             print_warning(f"No English subtitles found in '{filename}'.")
 
