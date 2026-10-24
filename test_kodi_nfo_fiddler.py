@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 import subprocess
+import xml.etree.ElementTree as ET
 from unittest.mock import patch, MagicMock
 
 from kodi_nfo_fiddler import (
@@ -16,6 +17,8 @@ from kodi_nfo_fiddler import (
     print_warning,
     find_sidecar_subtitles,
     remux_mp4_to_mkv,
+    upgrade_nfo_file,
+    upgrade_nfo_files,
 )
 
 class TestMovieOrganizer(unittest.TestCase):
@@ -25,6 +28,85 @@ class TestMovieOrganizer(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
+
+    @staticmethod
+    def _tmdb_response(payload):
+        response = MagicMock()
+        response.json.return_value = payload
+        return response
+
+    def _write_nfo(self, relative_path, contents):
+        path = os.path.join(self.test_dir, relative_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as nfo:
+            nfo.write(contents)
+        return path
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_converts_imdb_link_to_tmdb_kodi_nfo(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "movie_results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-15"}]
+        })
+        path = self._write_nfo("Inception/movie.nfo", "https://www.imdb.com/title/tt1375666/\n")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.tag, "movie")
+        self.assertEqual(root.findtext("title"), "Inception")
+        self.assertEqual(root.findtext("year"), "2010")
+        unique_ids = {uid.get("type"): uid.text for uid in root.findall("uniqueid")}
+        self.assertEqual(unique_ids, {"tmdb": "27205", "imdb": "tt1375666"})
+        self.assertEqual(root.findtext("kodi_nfo_url"), "https://www.themoviedb.org/movie/27205")
+        self.assertIn("/find/tt1375666", mock_get.call_args.args[0])
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_converts_tmdb_link(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "id": 27205, "title": "Inception", "release_date": "2010-07-15", "imdb_id": "tt1375666"
+        })
+        path = self._write_nfo("movie.nfo", "https://www.themoviedb.org/movie/27205-inception\n")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.find("uniqueid[@type='tmdb']").text, "27205")
+        self.assertEqual(root.find("uniqueid[@type='imdb']").text, "tt1375666")
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_leaves_xml_nfo_untouched(self, mock_get):
+        original = "<movie><title>Keep Me</title></movie>\nhttps://www.imdb.com/title/tt1375666/\n"
+        path = self._write_nfo("movie.nfo", original)
+
+        self.assertEqual(upgrade_nfo_file(path), "skipped")
+
+        mock_get.assert_not_called()
+        with open(path, encoding="utf-8") as nfo:
+            self.assertEqual(nfo.read(), original)
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_leaves_file_unchanged_when_tmdb_has_no_match(self, mock_get):
+        mock_get.return_value = self._tmdb_response({"movie_results": []})
+        original = "https://www.imdb.com/title/tt0000001/\n"
+        path = self._write_nfo("movie.nfo", original)
+
+        self.assertEqual(upgrade_nfo_file(path), "failed")
+
+        with open(path, encoding="utf-8") as nfo:
+            self.assertEqual(nfo.read(), original)
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_files_walks_recursively(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "movie_results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-15"}]
+        })
+        self._write_nfo("a/b/legacy.NFO", "tt1375666")
+        self._write_nfo("c/modern.nfo", "<movie><title>Done</title></movie>")
+        self._write_nfo("c/notes.txt", "tt1375666")
+
+        counts = upgrade_nfo_files(self.test_dir)
+
+        self.assertEqual(counts, {"upgraded": 1, "skipped": 1, "failed": 0})
 
     @patch.dict(os.environ, {}, clear=True)
     @patch('sys.stdout')

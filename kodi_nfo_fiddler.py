@@ -27,6 +27,9 @@ TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
 
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
+TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
+IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
+TMDB_MOVIE_URL_PATTERN = re.compile(r"themoviedb\.org/movie/(\d+)", re.IGNORECASE)
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
@@ -589,6 +592,96 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
 
     return directory_path if not is_root else None
 
+def tmdb_get(path, params=None):
+    """Performs an authenticated TMDB API GET request and returns the decoded JSON."""
+    response = requests.get(
+        f"{TMDB_API_BASE_URL}{path}",
+        headers={"Authorization": f"Bearer {TMDB_READ_TOKEN}", "accept": "application/json"},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+def lookup_tmdb_by_imdb_id(imdb_id):
+    """Returns (tmdb_id, title, year) for an IMDB id, or None if TMDB has no movie for it."""
+    results = tmdb_get(f"/find/{imdb_id}", {"external_source": "imdb_id"}).get("movie_results", [])
+    if not results:
+        return None
+    hit = results[0]
+    return hit["id"], hit["title"], (hit.get("release_date") or "")[:4]
+
+def lookup_tmdb_by_id(tmdb_id):
+    """Returns (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
+    data = tmdb_get(f"/movie/{tmdb_id}")
+    return data["id"], data["title"], (data.get("release_date") or "")[:4], data.get("imdb_id")
+
+def write_kodi_nfo(path, tmdb_id, title, year, imdb_id=None):
+    """Writes a Kodi movie NFO with a TMDB unique id."""
+    with open(path, "w", encoding="utf-8") as nfo:
+        nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
+        nfo.write("<movie>\n")
+        nfo.write(f"    <title>{escape(title)}</title>\n")
+        if year:
+            nfo.write(f"    <year>{escape(year)}</year>\n")
+        nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_id}</uniqueid>\n")
+        if imdb_id:
+            nfo.write(f"    <uniqueid type=\"imdb\">{escape(imdb_id)}</uniqueid>\n")
+        nfo.write(f"    <kodi_nfo_url>{TMDB_MOVIE_BASE_URL}{tmdb_id}</kodi_nfo_url>\n")
+        nfo.write("</movie>\n")
+
+def upgrade_nfo_file(path):
+    """
+    Upgrades a plain-text NFO (a bare IMDB or TMDB link) to Kodi XML format.
+    Returns "upgraded", "skipped" (already XML or no recognizable link) or "failed".
+    """
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as nfo:
+            text = nfo.read()
+    except OSError as e:
+        print_warning(f"[!] Could not read '{path}': {e}")
+        return "failed"
+
+    # Anything XML-like is left alone, including malformed or non-movie NFOs.
+    if text.lstrip().startswith("<"):
+        return "skipped"
+
+    imdb_match = IMDB_ID_PATTERN.search(text)
+    tmdb_match = TMDB_MOVIE_URL_PATTERN.search(text)
+    if not imdb_match and not tmdb_match:
+        print_warning(f"[!] No IMDB or TMDB link found in '{path}'. Leaving it unchanged.")
+        return "skipped"
+
+    try:
+        if tmdb_match:
+            tmdb_id, title, year, imdb_id = lookup_tmdb_by_id(tmdb_match.group(1))
+            imdb_id = imdb_id or (imdb_match.group(1) if imdb_match else None)
+        else:
+            imdb_id = imdb_match.group(1)
+            hit = lookup_tmdb_by_imdb_id(imdb_id)
+            if hit is None:
+                print_warning(f"[!] No TMDB movie found for {imdb_id} in '{path}'. Leaving it unchanged.")
+                return "failed"
+            tmdb_id, title, year = hit
+        write_kodi_nfo(path, tmdb_id, title, year, imdb_id)
+    except (requests.RequestException, KeyError, ValueError, OSError) as e:
+        print_warning(f"[!] Failed to upgrade '{path}': {e}")
+        return "failed"
+
+    print(f"[+] Upgraded NFO: {path} -> TMDB {tmdb_id} ({title})")
+    return "upgraded"
+
+def upgrade_nfo_files(directory):
+    """Recursively upgrades legacy plain-text NFO files under the given directory."""
+    counts = {"upgraded": 0, "skipped": 0, "failed": 0}
+    for current_dir, _, filenames in os.walk(directory):
+        for filename in sorted(filenames):
+            if filename.lower().endswith(".nfo"):
+                counts[upgrade_nfo_file(os.path.join(current_dir, filename))] += 1
+
+    print(f"NFO upgrade complete: {counts['upgraded']} upgraded, {counts['skipped']} skipped, {counts['failed']} failed")
+    return counts
+
 def main():
     if not TMDB_READ_TOKEN:
         print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
@@ -601,6 +694,11 @@ def main():
         action="store_true",
         help="remux MP4 files (plus English/Swedish sidecar subtitles) into MKV and remove the MP4",
     )
+    parser.add_argument(
+        "--upgrade-nfo",
+        action="store_true",
+        help="recursively upgrade plain-text NFO files (IMDB/TMDB links) to Kodi XML with a TMDB id, then exit",
+    )
     args = parser.parse_args()
     target_dir = args.directory
 
@@ -610,6 +708,10 @@ def main():
 
     target_dir = os.path.abspath(target_dir)
     print(f"Scanning directory: {target_dir}")
+
+    if args.upgrade_nfo:
+        upgrade_nfo_files(target_dir)
+        return
 
     # 1. Snapshot the pre-existing subdirectories BEFORE processing loose files
     try:

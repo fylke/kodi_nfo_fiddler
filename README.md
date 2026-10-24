@@ -32,6 +32,12 @@ Process a specific directory:
 python3 kodi_nfo_fiddler.py /path/to/movies
 ```
 
+Upgrade legacy NFO files with `--upgrade-nfo`. This walks the directory recursively and rewrites plain-text NFO files that contain only an IMDB or TMDB link into Kodi movie XML with a TMDB unique id (the IMDB id is kept as a second `uniqueid`). IMDB links are resolved to TMDB through the TMDB API. NFOs that are already XML are left alone, as are files TMDB cannot match. This mode only upgrades NFOs and does not organize or remux videos:
+
+```bash
+python3 kodi_nfo_fiddler.py --upgrade-nfo /path/to/movies
+```
+
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 
 Remux MP4 files into MKV with `--remux-mp4` (without it, MP4 files are skipped):
