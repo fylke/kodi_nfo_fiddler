@@ -13,7 +13,6 @@ from kodi_nfo_fiddler import (
     sanitize_folder_name,
     search_tmdb,
     process_directory,
-    write_metadata_file,
     print_warning,
     find_sidecar_subtitles,
     remux_mp4_to_mkv,
@@ -774,6 +773,20 @@ class TestMovieOrganizer(unittest.TestCase):
         fallback_params = mock_get.call_args_list[1].kwargs["params"]
         self.assertNotIn("year", fallback_params)
         self.assertNotIn("primary_release_year", fallback_params)
+
+    @patch('kodi_nfo_fiddler.requests.get')
+    def test_search_tmdb_omits_year_filters_for_unknown_year(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-15"}]
+        })
+
+        result = search_tmdb("Inception", "Unknown Year")
+
+        self.assertEqual(result, ("https://www.themoviedb.org/movie/27205", "Inception", "2010"))
+        params = mock_get.call_args.kwargs["params"]
+        self.assertNotIn("year", params)
+        self.assertNotIn("primary_release_year", params)
+        self.assertNotIn("api_key", params)
         
 if __name__ == '__main__':
     unittest.main()

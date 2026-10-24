@@ -25,7 +25,6 @@ load_dotenv()
 TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
 # ---------------------
 
-TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
@@ -235,67 +234,52 @@ def search_tmdb(title, year):
     Searches TMDB for a movie title. If a strict year search fails,
     it falls back to a broad text search to match web behavior.
     """
-    API_KEY = "your_tmdb_api_key_here"
-    BASE_URL = "https://api.themoviedb.org/3/search/movie"
-
-    headers = {
-        "Authorization": f"Bearer {TMDB_READ_TOKEN}",
-        "accept": "application/json"
-    }
+    has_year = bool(year) and year != "Unknown Year"
 
     # Tier 1: Strict API Search (Title + Exact Year Filter)
     params = {
-        "api_key": API_KEY,
         "query": title,
-        "year": year,
         "include_adult": "false",
         "language": "en-US",
         "page": 1
     }
 
-    if year and year != "Unknown Year":
+    if has_year:
+        params["year"] = year
         params["primary_release_year"] = year
 
     try:
-        response = requests.get(TMDB_SEARCH_URL, headers=headers, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get("results", [])
+        results = tmdb_get("/search/movie", params).get("results", [])
 
-            # If Tier 1 found matches, return the top hit
+        # If Tier 1 found matches, return the top hit
+        if results:
+            hit = results[0]
+            tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
+            return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
+
+        # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
+        if has_year:
+            print_warning(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
+            broad_params = {k: v for k, v in params.items() if k not in ("year", "primary_release_year")}
+            results = tmdb_get("/search/movie", broad_params).get("results", [])
+
+            # Scan results manually to find a close match within a 1-year variance window
+            for hit in results:
+                release_date = hit.get("release_date", "")
+                if release_date:
+                    hit_year = int(release_date[:4])
+                    target_year = int(year)
+
+                    # Allow a +/- 1 year tolerance window for international premieres
+                    if abs(hit_year - target_year) <= 1:
+                        tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
+                        return tmdb_url, hit["title"], str(hit_year)
+
+            # Final ultimate safety: if no year is close but it's the only hit, take it
             if results:
                 hit = results[0]
                 tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
                 return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
-
-        # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
-        if year and year != "Unknown Year":
-            print_warning(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
-            params.pop("year", None)
-            params.pop("primary_release_year", None)
-
-            response = requests.get(BASE_URL, headers=headers, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get("results", [])
-
-                # Scan results manually to find a close match within a 1-year variance window
-                for hit in results:
-                    release_date = hit.get("release_date", "")
-                    if release_date:
-                        hit_year = int(release_date[:4])
-                        target_year = int(year)
-
-                        # Allow a +/- 1 year tolerance window for international premieres
-                        if abs(hit_year - target_year) <= 1:
-                            tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
-                            return tmdb_url, hit["title"], str(hit_year)
-
-                # Final ultimate safety: if no year is close but it's the only hit, take it
-                if results:
-                    hit = results[0]
-                    tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
-                    return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
 
     except Exception as e:
         print(f"[-] Network error querying TMDB: {e}")
@@ -433,21 +417,6 @@ def sanitize_folder_name(name):
     sanitized = re.sub(r"[^\w\s().,!'-]", '', name)
     return sanitized.replace(" ", "_")
 
-def write_metadata_file(path, url, title, year, metadata, original_filename):
-    """Helper to write the movie details to an NFO file (with empty rows before formatting)."""
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(f"{url}\n\n")
-            f.write(f"Title: {title}\n")
-            f.write(f"Year: {year}\n")
-            f.write(f"Resolution: {metadata['resolution']}\n")
-            f.write(f"Source: {metadata['source']}\n")
-            f.write(f"Audio Codec: {metadata['audio_codec']}\n")
-            f.write(f"Audio Channels: {metadata['audio_channels']}\n\n")
-            f.write(f"Original Filename: {original_filename}\n")
-    except Exception as e:
-        print(f" -> Failed writing metadata file: {e}")
-
 def get_original_directory(directory_path):
     """Reads the original directory name from an existing NFO, if available."""
     for filename in os.listdir(directory_path):
@@ -560,21 +529,14 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         nfo_file_name = f"{new_name}.nfo"
         nfo_file_path = os.path.join(dest_dir, nfo_file_name)
 
-        with open(nfo_file_path, 'w', encoding='utf-8') as nfo:
-            nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
-            nfo.write("<movie>\n")
-            nfo.write(f"    <original_filename>{escape(original_filename)}</original_filename>\n")
-            nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
-            nfo.write(f"    <title>{escape(file_title)}</title>\n")
-            nfo.write(f"    <year>{metadata['year']}</year>\n")
-
-            if is_hit:
-                nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_url.split('/')[-1]}</uniqueid>\n")
-                nfo.write(f"    <kodi_nfo_url>{tmdb_url}</kodi_nfo_url>\n")
-            else:
-                nfo.write("    <kodi_nfo_url></kodi_nfo_url>\n")
-
-            nfo.write("</movie>\n")
+        write_kodi_nfo(
+            nfo_file_path,
+            file_title,
+            metadata['year'],
+            tmdb_id=tmdb_url.split('/')[-1] if is_hit else None,
+            original_filename=original_filename,
+            original_directory=original_directory,
+        )
 
         # 7. Final Step: Rename the directory itself if it's an existing subdir
         if not is_root:
@@ -618,18 +580,27 @@ def lookup_tmdb_by_id(tmdb_id):
     data = tmdb_get(f"/movie/{tmdb_id}")
     return data["id"], data["title"], (data.get("release_date") or "")[:4], data.get("imdb_id")
 
-def write_kodi_nfo(path, tmdb_id, title, year, imdb_id=None):
-    """Writes a Kodi movie NFO with a TMDB unique id."""
+def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filename=None, original_directory=None):
+    """
+    Writes a Kodi movie NFO. Without a tmdb_id (a no-hit) the unique ids are omitted
+    and kodi_nfo_url is left empty. The original_* fields let a no-hit be retried later.
+    """
     with open(path, "w", encoding="utf-8") as nfo:
         nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
         nfo.write("<movie>\n")
+        if original_filename:
+            nfo.write(f"    <original_filename>{escape(original_filename)}</original_filename>\n")
+        if original_directory:
+            nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
         nfo.write(f"    <title>{escape(title)}</title>\n")
         if year:
             nfo.write(f"    <year>{escape(year)}</year>\n")
-        nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_id}</uniqueid>\n")
+        if tmdb_id:
+            nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_id}</uniqueid>\n")
         if imdb_id:
             nfo.write(f"    <uniqueid type=\"imdb\">{escape(imdb_id)}</uniqueid>\n")
-        nfo.write(f"    <kodi_nfo_url>{TMDB_MOVIE_BASE_URL}{tmdb_id}</kodi_nfo_url>\n")
+        kodi_nfo_url = f"{TMDB_MOVIE_BASE_URL}{tmdb_id}" if tmdb_id else ""
+        nfo.write(f"    <kodi_nfo_url>{kodi_nfo_url}</kodi_nfo_url>\n")
         nfo.write("</movie>\n")
 
 def lookup_tmdb_tv_by_external_id(external_id, source):
@@ -745,7 +716,7 @@ def upgrade_nfo_file(path):
                 print_warning(f"[!] No TMDB movie found for {imdb_id} in '{path}'. Leaving it unchanged.")
                 return "failed"
             tmdb_id, title, year = hit
-        write_kodi_nfo(path, tmdb_id, title, year, imdb_id)
+        write_kodi_nfo(path, title, year, tmdb_id=tmdb_id, imdb_id=imdb_id)
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
         print_warning(f"[!] Failed to upgrade '{path}': {e}")
         return "failed"
