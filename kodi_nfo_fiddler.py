@@ -222,6 +222,10 @@ def get_mkv_metadata(filepath):
         "english_subtitles": english_subtitles
     }
 
+def _as_result(hit):
+    """Converts a TMDB search hit into (tmdb_url, title, year)."""
+    return f"{TMDB_MOVIE_BASE_URL}{hit['id']}", hit["title"], (hit.get("release_date") or "####")[:4]
+
 def search_tmdb(title, year):
     """
     Searches TMDB for a movie title. If a strict year search fails,
@@ -246,9 +250,7 @@ def search_tmdb(title, year):
 
         # If Tier 1 found matches, return the top hit
         if results:
-            hit = results[0]
-            tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
-            return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
+            return _as_result(results[0])
 
         # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
         if has_year:
@@ -265,14 +267,11 @@ def search_tmdb(title, year):
 
                     # Allow a +/- 1 year tolerance window for international premieres
                     if abs(hit_year - target_year) <= 1:
-                        tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
-                        return tmdb_url, hit["title"], str(hit_year)
+                        return _as_result(hit)
 
             # Last resort: no hit was within a year of the target, so take the top result
             if results:
-                hit = results[0]
-                tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
-                return tmdb_url, hit["title"], hit.get("release_date", "####")[:4]
+                return _as_result(results[0])
 
     except Exception as e:
         print(f"[-] Network error querying TMDB: {e}")
@@ -424,6 +423,65 @@ def get_original_directory(directory_path):
 
     return None
 
+def clean_directory(directory_path, is_root):
+    """Removes junk files, featurettes, samples and (outside the root) smaller duplicate videos."""
+    remove_unwanted_files(directory_path)
+    remove_featurettes_folder(directory_path)
+    remove_sample_entries(directory_path)
+    if not is_root:
+        remove_smaller_video_files(directory_path)
+
+def prepare_mkv(directory_path, filename, remux_mp4):
+    """
+    Returns (file_path, mkv_filename) for a video, remuxing an MP4 first if allowed.
+    Returns None when the file should be skipped.
+    """
+    file_path = os.path.join(directory_path, filename)
+    if remux_mp4 and filename.lower().endswith('.mp4'):
+        file_path = remux_mp4_to_mkv(file_path)
+        if file_path is None:
+            return None
+        return file_path, f"{os.path.splitext(filename)[0]}.mkv"
+    if not filename.lower().endswith('.mkv'):
+        print_warning(f"[!] Skipping non-MKV media file: {filename}")
+        return None
+    return file_path, filename
+
+def resolve_naming(metadata):
+    """
+    Looks the movie up on TMDB and returns (tmdb_id, nfo_title, folder_title, year).
+    A miss keeps the parsed title and prefixes the folder title with no_hit_.
+    """
+    search_result = search_tmdb(metadata['title'], metadata['year'])
+    if search_result is None:
+        print_warning(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
+        return None, metadata['title'], f"no_hit_{metadata['title']}", metadata['year']
+
+    # Use the official TMDB title and release year for naming
+    tmdb_url, title, year = search_result
+    return tmdb_url.split('/')[-1], title, title, year
+
+def build_new_name(metadata, folder_title, year):
+    """Builds the clean Title_(Year)_(resolution_source_codec_channels) name."""
+    metadata_suffix = sanitize_folder_name(
+        f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
+    )
+    return f"{sanitize_folder_name(folder_title)}_({year})_{metadata_suffix}"
+
+def rename_directory(directory_path, new_name):
+    """Renames a directory to new_name and returns its resulting path."""
+    final_path = os.path.join(os.path.dirname(directory_path), new_name)
+
+    # Guard against overwriting if name is already perfectly normalized
+    if directory_path != final_path:
+        print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_name}'")
+        try:
+            os.rename(directory_path, final_path)
+            return final_path
+        except OSError as e:
+            print(f"[-] Directory rename failed: {e}")
+    return directory_path
+
 def process_directory(directory_path, is_root=False, remux_mp4=False):
     directory_path = os.path.abspath(directory_path)
     original_directory = os.path.basename(directory_path)
@@ -432,60 +490,28 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         stored_directory = get_original_directory(directory_path)
         if stored_directory:
             original_directory = stored_directory
-    remove_unwanted_files(directory_path)
-    remove_featurettes_folder(directory_path)
-    remove_sample_entries(directory_path)
-    if not is_root:
-        remove_smaller_video_files(directory_path)
+
+    clean_directory(directory_path, is_root)
     video_files = get_video_files(directory_path)
     if not video_files:
         return None
 
     print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {len(video_files)} video file(s))")
 
-    for filename in video_files:
-        original_filename = filename
-        file_path = os.path.join(directory_path, filename)
-        if remux_mp4 and filename.lower().endswith('.mp4'):
-            file_path = remux_mp4_to_mkv(file_path)
-            if file_path is None:
-                continue
-            filename = f"{os.path.splitext(original_filename)[0]}.mkv"
-        elif not filename.lower().endswith('.mkv'):
-            print_warning(f"[!] Skipping non-MKV media file: {filename}")
+    for original_filename in video_files:
+        prepared = prepare_mkv(directory_path, original_filename, remux_mp4)
+        if prepared is None:
             continue
-
-        ext = os.path.splitext(filename)[1]
+        file_path, filename = prepared
         print(f" -> Processing file: {filename}")
 
         # Prefer the original directory metadata when retrying a previous no-hit.
-        metadata = parse_filename(filename, file_path)
-        if stored_directory:
-            metadata = parse_filename(stored_directory, file_path)
-
+        metadata = parse_filename(stored_directory or filename, file_path)
         if not metadata.get("english_subtitles", False):
             print_warning(f"[!] WARNING: No English subtitles found in '{filename}'.")
 
-        search_result = search_tmdb(metadata['title'], metadata['year'])
-
-        if search_result is None:
-            print_warning(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
-            tmdb_id = None
-            file_title = metadata['title']
-            target_title = f"no_hit_{file_title}"
-            target_year = metadata['year']
-        else:
-            # Use the official TMDB title and release year for naming
-            tmdb_url, file_title, target_year = search_result
-            tmdb_id = tmdb_url.split('/')[-1]
-            target_title = file_title
-
-        # Construct the clean destination directory name (with no_hit_ prefix if applicable)
-        metadata_suffix = sanitize_folder_name(
-            f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
-        )
-        sanitized_title = sanitize_folder_name(target_title)
-        new_name = f"{sanitized_title}_({target_year})_{metadata_suffix}"
+        tmdb_id, nfo_title, folder_title, year = resolve_naming(metadata)
+        new_name = build_new_name(metadata, folder_title, year)
 
         # Loose files in the root get a new folder; files in an existing subdirectory stay put
         if is_root:
@@ -494,38 +520,24 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         else:
             dest_dir = directory_path
 
-        new_file_path = os.path.join(dest_dir, f"{new_name}{ext}")
-
+        new_file_path = os.path.join(dest_dir, f"{new_name}{os.path.splitext(filename)[1]}")
         print(f"[+] Setting asset to: {new_file_path}")
         os.rename(file_path, new_file_path)
 
-        # Write the .nfo sidecar next to the video
         write_kodi_nfo(
             os.path.join(dest_dir, f"{new_name}.nfo"),
-            file_title,
+            nfo_title,
             metadata['year'],
             tmdb_id=tmdb_id,
             original_filename=original_filename,
             original_directory=original_directory,
         )
 
-        # Rename the directory itself if it's an existing subdir
+        # A subdirectory is renamed to match its first video and then we're done
         if not is_root:
-            parent_dir = os.path.dirname(directory_path)
-            final_subdir_path = os.path.join(parent_dir, new_name)
+            return rename_directory(directory_path, new_name)
 
-            # Guard against overwriting if name is already perfectly normalized
-            if directory_path != final_subdir_path:
-                print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_name}'")
-                try:
-                    os.rename(directory_path, final_subdir_path)
-                    # Return early since the tracking directory path just moved locations
-                    return final_subdir_path
-                except Exception as e:
-                    print(f"[-] Directory rename failed: {e}")
-            return directory_path
-
-    return directory_path if not is_root else None
+    return None if is_root else directory_path
 
 def tmdb_get(path, params=None):
     """Performs an authenticated TMDB API GET request and returns the decoded JSON."""
