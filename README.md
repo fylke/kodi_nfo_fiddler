@@ -34,6 +34,14 @@ python3 kodi_nfo_fiddler.py /path/to/movies
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 
+Remux MP4 files into MKV with `--remux-mp4` (without it, MP4 files are skipped):
+
+```bash
+python3 kodi_nfo_fiddler.py --remux-mp4 /path/to/movies
+```
+
+With the flag, MP4 files are remuxed into MKV containers without re-encoding. Matching sidecar subtitles whose filenames contain an English (`en`, `eng`, `english`) or Swedish (`sv`, `swe`, `swedish`, `svenska`) language tag are included; English tracks are ordered first and set as the default when present. The source MP4 is removed only after a successful conversion. Subtitle sidecars remain in place.
+
 ## Dev container
 
 Open the repository in VS Code and choose **Reopen in Container**. Once the container is created, run the tests in its terminal with:

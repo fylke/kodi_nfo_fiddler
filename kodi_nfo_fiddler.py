@@ -5,12 +5,14 @@
 # ]
 # ///
 
+import argparse
 import os
 import sys
 import re
 import shutil
 import json
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 import requests
@@ -29,6 +31,11 @@ MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
 SOURCE_NORMALIZATIONS = {"WEB-DL": "WEBRip", "WEB": "WEBRip", "BRRip": "BluRay", "BDRip": "BluRay", "DVDRip": "DVD"}
+SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
+SUBTITLE_LANGUAGES = {
+    "en": ("en", "eng", "english"),
+    "sv": ("sv", "swe", "swedish", "svenska"),
+}
 
 
 def print_warning(message):
@@ -36,6 +43,79 @@ def print_warning(message):
     if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
         message = f"\033[33m{message}\033[0m"
     print(message)
+
+
+def find_sidecar_subtitles(video_path):
+    """Find language-tagged subtitle files whose names match the video basename."""
+    directory = os.path.dirname(video_path)
+    video_stem = os.path.splitext(os.path.basename(video_path))[0]
+    subtitles = {"en": [], "sv": []}
+
+    for filename in os.listdir(directory):
+        stem, extension = os.path.splitext(filename)
+        if extension.lower() not in SUBTITLE_EXTENSIONS or not os.path.isfile(os.path.join(directory, filename)):
+            continue
+        if not stem.casefold().startswith(video_stem.casefold()):
+            continue
+
+        suffix = stem[len(video_stem):]
+        if not suffix or suffix[0] not in " ._-":
+            continue
+        tokens = {token.casefold() for token in re.split(r"[ ._-]+", suffix) if token}
+        for language, aliases in SUBTITLE_LANGUAGES.items():
+            if tokens.intersection(aliases):
+                subtitles[language].append(os.path.join(directory, filename))
+                break
+
+    for language in subtitles:
+        subtitles[language].sort(key=str.casefold)
+    return subtitles
+
+
+def remux_mp4_to_mkv(mp4_path):
+    """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
+    subtitles = find_sidecar_subtitles(mp4_path)
+    english_subtitles = subtitles["en"]
+    swedish_subtitles = subtitles["sv"]
+    file_descriptor, output_path = tempfile.mkstemp(
+        prefix=".kodi_nfo_fiddler_",
+        suffix=".mkv",
+        dir=os.path.dirname(mp4_path),
+    )
+    os.close(file_descriptor)
+    os.remove(output_path)
+
+    command = ["mkvmerge", "-o", output_path, mp4_path]
+    ordered_subtitles = [
+        *((path, "eng") for path in english_subtitles),
+        *((path, "swe") for path in swedish_subtitles),
+    ]
+    for index, (subtitle_path, language) in enumerate(ordered_subtitles):
+        is_default = index == 0
+        command.extend([
+            "--language", f"0:{language}",
+            "--default-track-flag", f"0:{'yes' if is_default else 'no'}",
+            subtitle_path,
+        ])
+
+    try:
+        subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        if not os.path.isfile(output_path):
+            raise RuntimeError("mkvmerge completed without creating an output file")
+        os.remove(mp4_path)
+        return output_path
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        details = getattr(error, "stderr", None)
+        print_warning(f"[!] Failed to convert '{os.path.basename(mp4_path)}' to MKV: {details or error}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return None
 
 
 def get_mkv_metadata(filepath):
@@ -379,7 +459,7 @@ def get_original_directory(directory_path):
 
     return None
 
-def process_directory(directory_path, is_root=False):
+def process_directory(directory_path, is_root=False, remux_mp4=False):
     directory_path = os.path.abspath(directory_path)
     original_directory = os.path.basename(directory_path)
     stored_directory = None
@@ -400,14 +480,21 @@ def process_directory(directory_path, is_root=False):
     print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {num_videos} video file(s))")
 
     for filename in video_files:
-        if not filename.lower().endswith('.mkv'):
+        original_filename = filename
+        file_path = os.path.join(directory_path, filename)
+        ext = os.path.splitext(filename)[1]
+        if remux_mp4 and filename.lower().endswith('.mp4'):
+            converted_path = remux_mp4_to_mkv(file_path)
+            if converted_path is None:
+                continue
+            file_path = converted_path
+            filename = f"{os.path.splitext(original_filename)[0]}.mkv"
+            ext = ".mkv"
+        elif not filename.lower().endswith('.mkv'):
             print_warning(f"[!] Skipping non-MKV media file: {filename}")
             continue
 
         # Keep track of the untouched original filename
-        original_filename = filename
-        file_path = os.path.join(directory_path, filename)
-        _, ext = os.path.splitext(filename)
         print(f" -> Processing file: {filename}")
 
         # Prefer the original directory metadata when retrying a previous no-hit.
@@ -507,10 +594,15 @@ def main():
         print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
         sys.exit(1)
 
-    if len(sys.argv) > 1:
-        target_dir = sys.argv[1]
-    else:
-        target_dir = "."
+    parser = argparse.ArgumentParser(description="Organize movie files and write Kodi NFO files.")
+    parser.add_argument("directory", nargs="?", default=".", help="directory to process (default: current directory)")
+    parser.add_argument(
+        "--remux-mp4",
+        action="store_true",
+        help="remux MP4 files (plus English/Swedish sidecar subtitles) into MKV and remove the MP4",
+    )
+    args = parser.parse_args()
+    target_dir = args.directory
 
     if not os.path.isdir(target_dir):
         print(f"Error: The directory '{target_dir}' does not exist.")
@@ -531,11 +623,11 @@ def main():
         existing_subdirs = []
 
     # 2. Process loose video files sitting directly in the root directory (Creates subdirs)
-    process_directory(target_dir, is_root=True)
+    process_directory(target_dir, is_root=True, remux_mp4=args.remux_mp4)
 
     # 3. Process nested files in existing subdirectories (Renames the subdirs)
     for subdir in existing_subdirs:
-        process_directory(subdir, is_root=False)
+        process_directory(subdir, is_root=False, remux_mp4=args.remux_mp4)
 
 if __name__ == "__main__":
     main()

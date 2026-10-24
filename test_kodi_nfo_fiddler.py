@@ -13,7 +13,9 @@ from kodi_nfo_fiddler import (
     search_tmdb,
     process_directory,
     write_metadata_file,
-    print_warning
+    print_warning,
+    find_sidecar_subtitles,
+    remux_mp4_to_mkv,
 )
 
 class TestMovieOrganizer(unittest.TestCase):
@@ -43,6 +45,70 @@ class TestMovieOrganizer(unittest.TestCase):
 
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertNotIn("\033[", output)
+
+    def test_find_sidecar_subtitles_matches_video_basename_and_languages(self):
+        video_path = os.path.join(self.test_dir, "Movie.2024.mp4")
+        sidecars = (
+            "Movie.2024.en.srt",
+            "Movie.2024.English.forced.ass",
+            "Movie.2024.sv.srt",
+            "Movie.2024.svenska.srt",
+            "Other.Movie.en.srt",
+            "Movie.2024.fr.srt",
+        )
+        for filename in sidecars:
+            with open(os.path.join(self.test_dir, filename), "w") as subtitle:
+                subtitle.write("subtitle")
+
+        found = find_sidecar_subtitles(video_path)
+
+        self.assertEqual(
+            [os.path.basename(path) for path in found["en"]],
+            ["Movie.2024.en.srt", "Movie.2024.English.forced.ass"],
+        )
+        self.assertEqual(
+            [os.path.basename(path) for path in found["sv"]],
+            ["Movie.2024.sv.srt", "Movie.2024.svenska.srt"],
+        )
+
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_remux_mp4_prioritizes_english_subtitles_and_removes_source(self, mock_run):
+        mp4_path = os.path.join(self.test_dir, "Movie.mp4")
+        english_path = os.path.join(self.test_dir, "Movie.en.srt")
+        swedish_path = os.path.join(self.test_dir, "Movie.sv.srt")
+        for path in (mp4_path, english_path, swedish_path):
+            with open(path, "w") as file:
+                file.write("test")
+
+        def create_output(command, **kwargs):
+            output_index = command.index("-o") + 1
+            with open(command[output_index], "w") as output:
+                output.write("mkv")
+            return MagicMock()
+
+        mock_run.side_effect = create_output
+
+        output_path = remux_mp4_to_mkv(mp4_path)
+
+        self.assertIsNotNone(output_path)
+        self.assertFalse(os.path.exists(mp4_path))
+        self.assertTrue(os.path.exists(english_path))
+        self.assertTrue(os.path.exists(swedish_path))
+        command = mock_run.call_args.args[0]
+        self.assertLess(command.index(english_path), command.index(swedish_path))
+        self.assertIn("0:eng", command)
+        self.assertIn("0:swe", command)
+        self.assertEqual(command[command.index("--default-track-flag") + 1], "0:yes")
+        self.assertEqual(command[command.index("--default-track-flag", command.index("--default-track-flag") + 1) + 1], "0:no")
+
+    @patch("kodi_nfo_fiddler.subprocess.run", side_effect=subprocess.CalledProcessError(1, "mkvmerge"))
+    def test_remux_mp4_failure_keeps_source(self, mock_run):
+        mp4_path = os.path.join(self.test_dir, "Movie.mp4")
+        with open(mp4_path, "w") as file:
+            file.write("video")
+
+        self.assertIsNone(remux_mp4_to_mkv(mp4_path))
+        self.assertTrue(os.path.exists(mp4_path))
 
     @patch('subprocess.run')
     def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
@@ -156,7 +222,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_skips_non_mkv_media(self, mock_tmdb):
-        video_path = os.path.join(self.test_dir, "inception.mp4")
+        video_path = os.path.join(self.test_dir, "inception.avi")
         with open(video_path, "w") as video_file:
             video_file.write("test")
 
@@ -166,6 +232,54 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertTrue(os.path.exists(video_path))
         mock_tmdb.assert_not_called()
         self.assertTrue(any("Skipping non-MKV media file" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch("kodi_nfo_fiddler.search_tmdb")
+    @patch("kodi_nfo_fiddler.remux_mp4_to_mkv")
+    def test_process_directory_does_not_remux_mp4_without_flag(self, mock_remux, mock_tmdb):
+        video_path = os.path.join(self.test_dir, "inception.mp4")
+        with open(video_path, "w") as video_file:
+            video_file.write("test")
+
+        process_directory(self.test_dir, is_root=True)
+
+        mock_remux.assert_not_called()
+        self.assertTrue(os.path.exists(video_path))
+
+    @patch("kodi_nfo_fiddler.search_tmdb")
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_process_directory_remuxes_mp4_before_organizing(self, mock_run, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = ("https://www.themoviedb.org/movie/27205", "Inception", "2010")
+        mock_mkv.return_value = {
+            "resolution": "1080p",
+            "audio_codec": "AAC",
+            "audio_channels": "2.0",
+            "english_subtitles": True,
+        }
+        video_path = os.path.join(self.test_dir, "Inception.2010.mp4")
+        subtitle_path = os.path.join(self.test_dir, "Inception.2010.en.srt")
+        for path in (video_path, subtitle_path):
+            with open(path, "w") as file:
+                file.write("test")
+
+        def create_output(command, **kwargs):
+            with open(command[command.index("-o") + 1], "w") as output:
+                output.write("mkv")
+            return MagicMock()
+
+        mock_run.side_effect = create_output
+
+        process_directory(self.test_dir, is_root=True, remux_mp4=True)
+
+        self.assertFalse(os.path.exists(video_path))
+        self.assertTrue(os.path.exists(subtitle_path))
+        organized_files = [
+            filename for _, _, filenames in os.walk(self.test_dir)
+            for filename in filenames
+        ]
+        self.assertTrue(any(filename.endswith(".mkv") for filename in organized_files))
+        self.assertTrue(any(filename.endswith(".nfo") for filename in organized_files))
+        mock_mkv.assert_called_once()
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb):
