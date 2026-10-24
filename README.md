@@ -32,11 +32,15 @@ Process a specific directory:
 python3 kodi_nfo_fiddler.py /path/to/movies
 ```
 
-Upgrade legacy NFO files with `--upgrade-nfo`. This walks the directory recursively and rewrites plain-text NFO files that contain only an IMDB or TMDB link into Kodi movie XML with a TMDB unique id (the IMDB id is kept as a second `uniqueid`). IMDB links are resolved to TMDB through the TMDB API. NFOs that are already XML are left alone, as are files TMDB cannot match. This mode only upgrades NFOs and does not organize or remux videos:
+Upgrade legacy NFO files with `--upgrade-nfo`. This walks the directory recursively and rewrites plain-text NFO files into Kodi XML. It runs on its own and does not organize or remux videos:
 
 ```bash
 python3 kodi_nfo_fiddler.py --upgrade-nfo /path/to/movies
 ```
+
+- **Movies:** an NFO containing only an IMDB or TMDB movie link becomes a Kodi `<movie>` NFO with a TMDB `uniqueid` (the IMDB id is kept as a second `uniqueid`). IMDB links are resolved through the TMDB API.
+- **TV shows:** a plain-text `tvshow.nfo` containing an IMDB, TMDB (`/tv/`) or TVDB (`?tab=series&id=` / `dereferrer/series/`) link becomes a Kodi `<tvshow>` NFO. TheTVDB is Kodi's default TV scraper, so the TVDB id is written as the default `uniqueid`, with TMDB and IMDB ids alongside. The TVDB id is looked up through the TMDB API. Per-episode NFOs are not touched.
+- NFOs that are already XML are left alone, as are files TMDB cannot match.
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 

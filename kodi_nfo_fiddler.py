@@ -30,6 +30,8 @@ TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
 TMDB_MOVIE_URL_PATTERN = re.compile(r"themoviedb\.org/movie/(\d+)", re.IGNORECASE)
+TMDB_TV_URL_PATTERN = re.compile(r"themoviedb\.org/tv/(\d+)", re.IGNORECASE)
+TVDB_ID_PATTERN = re.compile(r"thetvdb\.com/\S*?(?:[?&](?:amp;)?(?:series)?id=|dereferrer/series/)(\d+)", re.IGNORECASE)
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
@@ -630,9 +632,86 @@ def write_kodi_nfo(path, tmdb_id, title, year, imdb_id=None):
         nfo.write(f"    <kodi_nfo_url>{TMDB_MOVIE_BASE_URL}{tmdb_id}</kodi_nfo_url>\n")
         nfo.write("</movie>\n")
 
+def lookup_tmdb_tv_by_external_id(external_id, source):
+    """Returns the TMDB tv id for an IMDB or TVDB id (source: imdb_id or tvdb_id), or None."""
+    results = tmdb_get(f"/find/{external_id}", {"external_source": source}).get("tv_results", [])
+    return results[0]["id"] if results else None
+
+def lookup_tmdb_tv(tmdb_id):
+    """Returns TV show details including TVDB/IMDB ids from TMDB."""
+    data = tmdb_get(f"/tv/{tmdb_id}", {"append_to_response": "external_ids"})
+    external_ids = data.get("external_ids") or {}
+    return {
+        "tmdb_id": data["id"],
+        "title": data["name"],
+        "year": (data.get("first_air_date") or "")[:4],
+        "tvdb_id": external_ids.get("tvdb_id"),
+        "imdb_id": external_ids.get("imdb_id"),
+    }
+
+def write_kodi_tvshow_nfo(path, show):
+    """Writes a Kodi tvshow NFO. TVDB is the default id (Kodi's default TV scraper) when known."""
+    unique_ids = []
+    if show.get("tvdb_id"):
+        unique_ids.append(("tvdb", show["tvdb_id"]))
+    if show.get("tmdb_id"):
+        unique_ids.append(("tmdb", show["tmdb_id"]))
+    if show.get("imdb_id"):
+        unique_ids.append(("imdb", show["imdb_id"]))
+
+    with open(path, "w", encoding="utf-8") as nfo:
+        nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
+        nfo.write("<tvshow>\n")
+        if show.get("title"):
+            nfo.write(f"    <title>{escape(show['title'])}</title>\n")
+        if show.get("year"):
+            nfo.write(f"    <year>{escape(show['year'])}</year>\n")
+        for index, (id_type, value) in enumerate(unique_ids):
+            default = " default=\"true\"" if index == 0 else ""
+            nfo.write(f"    <uniqueid type=\"{id_type}\"{default}>{escape(str(value))}</uniqueid>\n")
+        nfo.write("</tvshow>\n")
+
+def upgrade_tvshow_nfo(path, text):
+    """Upgrades a plain-text tvshow.nfo link. Returns "upgraded", "skipped" or "failed"."""
+    imdb_match = IMDB_ID_PATTERN.search(text)
+    tmdb_match = TMDB_TV_URL_PATTERN.search(text)
+    tvdb_match = TVDB_ID_PATTERN.search(text)
+    if not (imdb_match or tmdb_match or tvdb_match):
+        print_warning(f"[!] No IMDB, TMDB or TVDB series id found in '{path}'. Leaving it unchanged.")
+        return "skipped"
+
+    try:
+        if tmdb_match:
+            tmdb_id = tmdb_match.group(1)
+        elif tvdb_match:
+            tmdb_id = lookup_tmdb_tv_by_external_id(tvdb_match.group(1), "tvdb_id")
+        else:
+            tmdb_id = lookup_tmdb_tv_by_external_id(imdb_match.group(1), "imdb_id")
+
+        if tmdb_id is None:
+            if tvdb_match:
+                # TVDB id is already what Kodi wants; write it without TMDB enrichment.
+                show = {"tvdb_id": tvdb_match.group(1), "imdb_id": imdb_match.group(1) if imdb_match else None}
+            else:
+                print_warning(f"[!] No TMDB TV show found for '{path}'. Leaving it unchanged.")
+                return "failed"
+        else:
+            show = lookup_tmdb_tv(tmdb_id)
+            if tvdb_match and not show["tvdb_id"]:
+                show["tvdb_id"] = tvdb_match.group(1)
+            if imdb_match and not show["imdb_id"]:
+                show["imdb_id"] = imdb_match.group(1)
+        write_kodi_tvshow_nfo(path, show)
+    except (requests.RequestException, KeyError, ValueError, OSError) as e:
+        print_warning(f"[!] Failed to upgrade '{path}': {e}")
+        return "failed"
+
+    print(f"[+] Upgraded TV show NFO: {path} -> TVDB {show.get('tvdb_id') or 'n/a'}, TMDB {show.get('tmdb_id') or 'n/a'}")
+    return "upgraded"
+
 def upgrade_nfo_file(path):
     """
-    Upgrades a plain-text NFO (a bare IMDB or TMDB link) to Kodi XML format.
+    Upgrades a plain-text NFO (a bare IMDB/TMDB link, or for tvshow.nfo also TVDB) to Kodi XML format.
     Returns "upgraded", "skipped" (already XML or no recognizable link) or "failed".
     """
     try:
@@ -645,6 +724,9 @@ def upgrade_nfo_file(path):
     # Anything XML-like is left alone, including malformed or non-movie NFOs.
     if text.lstrip().startswith("<"):
         return "skipped"
+
+    if os.path.basename(path).lower() == "tvshow.nfo":
+        return upgrade_tvshow_nfo(path, text)
 
     imdb_match = IMDB_ID_PATTERN.search(text)
     tmdb_match = TMDB_MOVIE_URL_PATTERN.search(text)
@@ -697,7 +779,7 @@ def main():
     parser.add_argument(
         "--upgrade-nfo",
         action="store_true",
-        help="recursively upgrade plain-text NFO files (IMDB/TMDB links) to Kodi XML with a TMDB id, then exit",
+        help="recursively upgrade plain-text NFO files to Kodi XML (movie NFOs get a TMDB id, tvshow.nfo gets a TVDB id), then exit",
     )
     args = parser.parse_args()
     target_dir = args.directory

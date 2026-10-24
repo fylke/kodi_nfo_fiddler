@@ -108,6 +108,69 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertEqual(counts, {"upgraded": 1, "skipped": 1, "failed": 0})
 
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_tvshow_nfo_converts_imdb_link_to_tvdb_default(self, mock_get):
+        mock_get.side_effect = [
+            self._tmdb_response({"tv_results": [{"id": 1396}]}),
+            self._tmdb_response({
+                "id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20",
+                "external_ids": {"tvdb_id": 81189, "imdb_id": "tt0903747"},
+            }),
+        ]
+        path = self._write_nfo("Breaking Bad/tvshow.nfo", "https://www.imdb.com/title/tt0903747/\n")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.tag, "tvshow")
+        self.assertEqual(root.findtext("title"), "Breaking Bad")
+        self.assertEqual(root.findtext("year"), "2008")
+        unique_ids = [(uid.get("type"), uid.text, uid.get("default")) for uid in root.findall("uniqueid")]
+        self.assertEqual(unique_ids, [
+            ("tvdb", "81189", "true"),
+            ("tmdb", "1396", None),
+            ("imdb", "tt0903747", None),
+        ])
+        self.assertIn("/find/tt0903747", mock_get.call_args_list[0].args[0])
+        self.assertEqual(mock_get.call_args_list[0].kwargs["params"], {"external_source": "imdb_id"})
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_tvshow_nfo_converts_tmdb_tv_link(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20",
+            "external_ids": {"tvdb_id": 81189, "imdb_id": "tt0903747"},
+        })
+        path = self._write_nfo("tvshow.nfo", "https://www.themoviedb.org/tv/1396-breaking-bad\n")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        self.assertEqual(ET.parse(path).getroot().find("uniqueid[@type='tvdb']").text, "81189")
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_tvshow_nfo_uses_tvdb_link_id(self, mock_get):
+        mock_get.side_effect = [
+            self._tmdb_response({"tv_results": []}),
+        ]
+        path = self._write_nfo("tvshow.nfo", "https://thetvdb.com/?tab=series&id=81189\n")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.tag, "tvshow")
+        self.assertEqual(root.find("uniqueid[@type='tvdb']").get("default"), "true")
+        self.assertEqual(root.find("uniqueid[@type='tvdb']").text, "81189")
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_tvshow_nfo_leaves_file_unchanged_when_tmdb_has_no_match(self, mock_get):
+        mock_get.return_value = self._tmdb_response({"tv_results": []})
+        original = "https://www.imdb.com/title/tt0000001/\n"
+        path = self._write_nfo("tvshow.nfo", original)
+
+        self.assertEqual(upgrade_nfo_file(path), "failed")
+
+        with open(path, encoding="utf-8") as nfo:
+            self.assertEqual(nfo.read(), original)
+
     @patch.dict(os.environ, {}, clear=True)
     @patch('sys.stdout')
     def test_print_warning_colors_interactive_output(self, mock_stdout):
