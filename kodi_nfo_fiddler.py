@@ -30,6 +30,14 @@ REMOVE_EXTENSIONS = ('.txt', '.jpg')
 SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
 SOURCE_NORMALIZATIONS = {"WEB-DL": "WEBRip", "WEB": "WEBRip", "BRRip": "BluRay", "BDRip": "BluRay", "DVDRip": "DVD"}
 
+
+def print_warning(message):
+    """Print a warning in yellow when stdout is an interactive terminal."""
+    if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
+        message = f"\033[33m{message}\033[0m"
+    print(message)
+
+
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
     try:
@@ -177,7 +185,7 @@ def search_tmdb(title, year):
 
         # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
         if year and year != "Unknown Year":
-            print(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
+            print_warning(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
             params.pop("year", None)
             params.pop("primary_release_year", None)
 
@@ -393,7 +401,7 @@ def process_directory(directory_path, is_root=False):
 
     for filename in video_files:
         if not filename.lower().endswith('.mkv'):
-            print(f"[!] Skipping non-MKV media file: {filename}")
+            print_warning(f"[!] Skipping non-MKV media file: {filename}")
             continue
 
         # Keep track of the untouched original filename
@@ -408,7 +416,7 @@ def process_directory(directory_path, is_root=False):
             metadata = parse_filename(stored_directory, file_path)
 
         if filename.lower().endswith('.mkv') and not metadata.get("english_subtitles", False):
-            print(f"[!] WARNING: No English subtitles found in '{filename}'.")
+            print_warning(f"[!] WARNING: No English subtitles found in '{filename}'.")
 
         # 1. Safely call the TMDB search
         search_result = search_tmdb(metadata['title'], metadata['year'])
@@ -421,7 +429,7 @@ def process_directory(directory_path, is_root=False):
 
         # 2. The No-Hit Fallback Switch
         if search_result is None:
-            print(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
+            print_warning(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
             is_hit = False
             # Folder title gets the prefix flag
             target_title = f"no_hit_{metadata['title']}"

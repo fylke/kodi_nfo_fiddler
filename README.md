@@ -32,6 +32,8 @@ Process a specific directory:
 python3 kodi_nfo_fiddler.py /path/to/movies
 ```
 
+Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
+
 ## Dev container
 
 Open the repository in VS Code and choose **Reopen in Container**. Once the container is created, run the tests in its terminal with:
