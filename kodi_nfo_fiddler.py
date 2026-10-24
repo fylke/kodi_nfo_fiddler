@@ -51,7 +51,7 @@ AUDIO_CODEC_NAMES = [
     (("DTS-HD",), "DTS-HD"),
     (("DTS",), "DTS"),
     (("EAC3", "E-AC-3"), "E-AC3"),
-    (("TRUEHD", "ATMOS"), "TrueHD"),
+    (("TRUEHD",), "TrueHD"),
     (("AC3", "AC-3"), "AC3"),
     (("AAC",), "AAC"),
     (("OPUS",), "Opus"),
@@ -184,17 +184,18 @@ def get_video_dimensions(properties):
     return None
 
 def describe_audio(track):
-    """Returns (codec, channel layout) labels for an mkvmerge audio track."""
+    """Returns (codec, channel layout, has_atmos) for an mkvmerge audio track."""
     codec_id = track.get("codec", "").upper()
     codec = next(
         (name for needles, name in AUDIO_CODEC_NAMES if any(needle in codec_id for needle in needles)),
         codec_id.replace("A_", "")
     )
+    has_atmos = "ATMOS" in codec_id
 
     channels = track.get("properties", {}).get("audio_channels")
     if not channels:
-        return codec, "Unknown Channels"
-    return codec, AUDIO_CHANNEL_LAYOUTS.get(channels, f"{channels}.0")
+        return codec, "Unknown Channels", has_atmos
+    return codec, AUDIO_CHANNEL_LAYOUTS.get(channels, f"{channels}.0"), has_atmos
 
 def get_mkv_metadata(filepath):
     """Attempts to read MKV technical metadata using mkvmerge -J."""
@@ -214,6 +215,7 @@ def get_mkv_metadata(filepath):
     resolution = "Unknown Resolution"
     audio_codec = "Unknown Codec"
     audio_channels = "Unknown Channels"
+    audio_atmos = False
     english_subtitles = False
 
     for track in tracks:
@@ -228,12 +230,13 @@ def get_mkv_metadata(filepath):
             if dimensions:
                 resolution = classify_resolution(*dimensions)
         elif track_type == "audio" and audio_codec == "Unknown Codec":
-            audio_codec, audio_channels = describe_audio(track)
+            audio_codec, audio_channels, audio_atmos = describe_audio(track)
 
     return {
         "resolution": resolution,
         "audio_codec": audio_codec,
         "audio_channels": audio_channels,
+        "audio_atmos": audio_atmos,
         "english_subtitles": english_subtitles
     }
 
@@ -261,7 +264,8 @@ def parse_filename(filename, file_path):
         "resolution": "Unknown Resolution",
         "source": "Unknown Source",
         "audio_codec": "Unknown Codec",
-        "audio_channels": "Unknown Channels"
+        "audio_channels": "Unknown Channels",
+        "audio_atmos": False
     }
 
     # Strip extension
@@ -436,10 +440,11 @@ def resolve_naming(metadata):
     return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or "####"
 
 def build_new_name(metadata, folder_title, year):
-    """Builds the clean Title_(Year)_(resolution_source_codec_channels) name."""
-    metadata_suffix = sanitize_folder_name(
-        f"({metadata['resolution']}_{metadata['source']}_{metadata['audio_codec']}_{metadata['audio_channels']})"
-    )
+    """Builds the clean Title_(Year)_(resolution_source_codec_channels[_Atmos]) name."""
+    parts = [metadata['resolution'], metadata['source'], metadata['audio_codec'], metadata['audio_channels']]
+    if metadata.get('audio_atmos'):
+        parts.append("Atmos")
+    metadata_suffix = sanitize_folder_name(f"({'_'.join(parts)})")
     return f"{sanitize_folder_name(folder_title)}_({year})_{metadata_suffix}"
 
 def rename_directory(directory_path, new_name):

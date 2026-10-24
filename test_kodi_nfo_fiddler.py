@@ -11,6 +11,7 @@ from kodi_nfo_fiddler import (
     get_mkv_metadata,
     parse_filename,
     sanitize_folder_name,
+    build_new_name,
     search_tmdb,
     process_directory,
     print_warning,
@@ -206,17 +207,17 @@ class TestMovieOrganizer(unittest.TestCase):
 
     def test_describe_audio_names_codec_and_channels(self):
         cases = (
-            ("A_DTS", 6, ("DTS", "5.1")),
-            ("A_EAC3", 8, ("E-AC3", "7.1")),
-            ("A_AC3", 2, ("AC3", "2.0")),
-            ("A_TRUEHD", 10, ("TrueHD", "10.0")),
-            ("A_VORBIS", 2, ("Vorbis", "2.0")),
-            ("MP3", 2, ("MP3", "2.0")),
-            ("MP2", 2, ("MP2", "2.0")),
-            ("PCM", 2, ("PCM", "2.0")),
-            ("E-AC-3 Atmos", 6, ("E-AC3", "5.1")),
-            ("TrueHD Atmos", 8, ("TrueHD", "7.1")),
-            ("A_WAVPACK4", None, ("WAVPACK4", "Unknown Channels")),
+            ("A_DTS", 6, ("DTS", "5.1", False)),
+            ("A_EAC3", 8, ("E-AC3", "7.1", False)),
+            ("A_AC3", 2, ("AC3", "2.0", False)),
+            ("A_TRUEHD", 10, ("TrueHD", "10.0", False)),
+            ("A_VORBIS", 2, ("Vorbis", "2.0", False)),
+            ("MP3", 2, ("MP3", "2.0", False)),
+            ("MP2", 2, ("MP2", "2.0", False)),
+            ("PCM", 2, ("PCM", "2.0", False)),
+            ("E-AC-3 Atmos", 6, ("E-AC3", "5.1", True)),
+            ("TrueHD Atmos", 8, ("TrueHD", "7.1", True)),
+            ("A_WAVPACK4", None, ("WAVPACK4", "Unknown Channels", False)),
         )
         for codec, channels, expected in cases:
             with self.subTest(codec=codec):
@@ -356,7 +357,23 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["resolution"], "1080p")
         self.assertEqual(metadata["audio_codec"], "DTS")
         self.assertEqual(metadata["audio_channels"], "5.1")
+        self.assertFalse(metadata["audio_atmos"])
         self.assertTrue(metadata["english_subtitles"])
+
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_flags_atmos(self, mock_run):
+        mock_run.return_value = MagicMock(stdout=json.dumps({
+            "tracks": [{
+                "type": "audio",
+                "codec": "TrueHD Atmos",
+                "properties": {"audio_channels": 8}
+            }]
+        }), returncode=0)
+
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertEqual(metadata["audio_codec"], "TrueHD")
+        self.assertTrue(metadata["audio_atmos"])
 
     @patch('subprocess.run')
     def test_get_mkv_metadata_reports_missing_english_subtitles(self, mock_run):
@@ -370,6 +387,21 @@ class TestMovieOrganizer(unittest.TestCase):
         metadata = get_mkv_metadata("dummy_path.mkv")
 
         self.assertFalse(metadata["english_subtitles"])
+
+    def test_build_new_name_appends_atmos_after_channels(self):
+        metadata = {
+            "resolution": "2160p", "source": "BluRay",
+            "audio_codec": "TrueHD", "audio_channels": "7.1", "audio_atmos": True,
+        }
+        self.assertEqual(
+            build_new_name(metadata, "Inception", "2010"),
+            "Inception_(2010)_(2160p_BluRay_TrueHD_7.1_Atmos)",
+        )
+        metadata["audio_atmos"] = False
+        self.assertEqual(
+            build_new_name(metadata, "Inception", "2010"),
+            "Inception_(2010)_(2160p_BluRay_TrueHD_7.1)",
+        )
 
     def test_sanitize_folder_name(self):
         raw_name = "The Movie: Director's! Cut (2024) (1080p, BluRay, DTS, 5.1)"
