@@ -237,6 +237,21 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(detect_source("movie bdrip x264"), "BluRay")
         self.assertIsNone(detect_source("Movie 2024 1080p"))
 
+    def test_detect_source_handles_spelling_variants(self):
+        expected = {
+            "Movie 2024 Blu Ray": "BluRay",
+            "Movie 2024 Blu-Ray": "BluRay",
+            "Movie 2024 1080p BDRemux": "BluRay",
+            "Movie 2024 2160p UHD BluRay REMUX": "BluRay",
+            "Movie 2024 WEBDL": "WEBRip",
+            "Movie 2024 HDRip": "WEBRip",
+            "Movie 2024 DVDR": "DVD",
+            "Show 2024 PDTV": "PDTV",
+        }
+        for text, source in expected.items():
+            with self.subTest(text=text):
+                self.assertEqual(detect_source(text), source)
+
     def test_find_sidecar_subtitles_matches_video_basename_and_languages(self):
         video_path = os.path.join(self.test_dir, "Movie.2024.mp4")
         sidecars = (

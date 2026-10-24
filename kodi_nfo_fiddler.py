@@ -29,8 +29,18 @@ TMDB_TV_URL_PATTERN = re.compile(r"themoviedb\.org/tv/(\d+)", re.IGNORECASE)
 TVDB_ID_PATTERN = re.compile(r"thetvdb\.com/\S*?(?:[?&](?:amp;)?(?:series)?id=|dereferrer/series/)(\d+)", re.IGNORECASE)
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
-SOURCE_KEYWORDS = ["BluRay", "WEB-DL", "WEBRip", "WEB", "HDTV", "DVDRip", "DVD", "BRRip", "BDRip"]
-SOURCE_NORMALIZATIONS = {"WEB-DL": "WEBRip", "WEB": "WEBRip", "BRRip": "BluRay", "BDRip": "BluRay", "DVDRip": "DVD"}
+SOURCE_KEYWORDS = [
+    "BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip",
+    "WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB",
+    "HDTV", "PDTV",
+    "DVDRip", "DVDR", "DVD",
+]
+SOURCE_NORMALIZATIONS = {
+    "Blu-Ray": "BluRay", "Blu Ray": "BluRay", "BDRemux": "BluRay",
+    "BRRip": "BluRay", "BDRip": "BluRay",
+    "WEB-DL": "WEBRip", "WEBDL": "WEBRip", "HDRip": "WEBRip", "WEB": "WEBRip",
+    "DVDRip": "DVD", "DVDR": "DVD",
+}
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
