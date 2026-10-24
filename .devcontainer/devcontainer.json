@@ -5,7 +5,7 @@
     "context": ".."
   },
   "remoteUser": "vscode",
-  "postCreateCommand": "python -m pip install --upgrade pip && python -m pip install requests python-dotenv ruff",
+  "postCreateCommand": "python -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install requests python-dotenv ruff",
   "customizations": {
     "vscode": {
       "extensions": [

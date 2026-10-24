@@ -80,11 +80,11 @@ With the flag, MP4 files are remuxed into MKV containers without re-encoding. Ma
 Open the repository in VS Code and choose **Reopen in Container**. Once the container is created, run the tests in its terminal with:
 
 ```bash
-python -m unittest -v
+.venv/bin/python -m unittest -v
 ```
 
 Lint with [ruff](https://docs.astral.sh/ruff/) (configured in `pyproject.toml`):
 
 ```bash
-ruff check .
+.venv/bin/ruff check .
 ```
