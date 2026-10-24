@@ -280,7 +280,7 @@ def search_tmdb(title, year):
                         tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
                         return tmdb_url, hit["title"], str(hit_year)
 
-            # Final ultimate safety: if no year is close but it's the only hit, take it
+            # Last resort: no hit was within a year of the target, so take the top result
             if results:
                 hit = results[0]
                 tmdb_url = f"https://www.themoviedb.org/movie/{hit['id']}"
