@@ -493,7 +493,19 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         if not metadata.get("english_subtitles", False):
             print_warning(f"No English subtitles found in '{filename}'.")
 
+        unknown_tags = [
+            key.replace('_', ' ')
+            for key in ('resolution', 'source', 'audio_codec', 'audio_channels')
+            if str(metadata[key]).startswith("Unknown")
+        ]
+        if unknown_tags:
+            print_warning(f"Unknown {', '.join(unknown_tags)} for '{filename}'. Skipping rename.")
+            continue
+
         tmdb_id, nfo_title, folder_title, year = resolve_naming(metadata)
+        if not re.fullmatch(r"\d{4}", year):
+            print_warning(f"Unknown year for '{filename}'. Skipping rename.")
+            continue
         new_name = build_new_name(metadata, folder_title, year)
 
         # Loose files in the root get a new folder; files in an existing subdirectory stay put
@@ -512,7 +524,7 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         write_kodi_nfo(
             os.path.join(dest_dir, f"{new_name}.nfo"),
             nfo_title,
-            year if re.fullmatch(r"\d{4}", year) else None,
+            year,
             tmdb_id=tmdb_id,
             original_filename=original_filename,
             original_directory=original_directory,

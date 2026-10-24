@@ -450,7 +450,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
-        video_path = os.path.join(self.test_dir, "inception.mp4")
+        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         txt_path = os.path.join(self.test_dir, "notes.TXT")
         jpg_path = os.path.join(self.test_dir, "poster.JPG")
         keep_path = os.path.join(self.test_dir, "keep.png")
@@ -480,7 +480,7 @@ class TestMovieOrganizer(unittest.TestCase):
     @patch("kodi_nfo_fiddler.search_tmdb")
     @patch("kodi_nfo_fiddler.remux_mp4_to_mkv")
     def test_process_directory_does_not_remux_mp4_without_flag(self, mock_remux, mock_tmdb):
-        video_path = os.path.join(self.test_dir, "inception.mp4")
+        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         with open(video_path, "w") as video_file:
             video_file.write("test")
 
@@ -500,8 +500,8 @@ class TestMovieOrganizer(unittest.TestCase):
             "audio_channels": "2.0",
             "english_subtitles": True,
         }
-        video_path = os.path.join(self.test_dir, "Inception.2010.mp4")
-        subtitle_path = os.path.join(self.test_dir, "Inception.2010.en.srt")
+        video_path = os.path.join(self.test_dir, "Inception.2010.BluRay.mp4")
+        subtitle_path = os.path.join(self.test_dir, "Inception.2010.BluRay.en.srt")
         for path in (video_path, subtitle_path):
             with open(path, "w") as file:
                 file.write("test")
@@ -525,13 +525,15 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertTrue(any(filename.endswith(".nfo") for filename in organized_files))
         mock_mkv.assert_called_once()
 
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
-    def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb):
+    def test_process_directory_removes_smaller_videos_in_subdirectory(self, mock_tmdb, mock_mkv):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         movie_dir = os.path.join(self.test_dir, "movie")
         os.makedirs(movie_dir)
-        large_path = os.path.join(movie_dir, "inception.mkv")
-        small_path = os.path.join(movie_dir, "inception-trailer.mkv")
+        large_path = os.path.join(movie_dir, "inception.BluRay.mkv")
+        small_path = os.path.join(movie_dir, "inception.BluRay-trailer.mkv")
         with open(large_path, "wb") as video_file:
             video_file.write(b"a" * 200)
         with open(small_path, "wb") as video_file:
@@ -554,8 +556,8 @@ class TestMovieOrganizer(unittest.TestCase):
             "audio_codec": "DTS",
             "audio_channels": "5.1"
         }
-        large_path = os.path.join(self.test_dir, "inception.mp4")
-        small_path = os.path.join(self.test_dir, "inception.mkv")
+        large_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
+        small_path = os.path.join(self.test_dir, "inception.BluRay.mkv")
         with open(large_path, "wb") as video_file:
             video_file.write(b"a" * 200)
         with open(small_path, "wb") as video_file:
@@ -577,7 +579,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_process_directory_removes_featurettes_folder(self, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
-        video_path = os.path.join(self.test_dir, "inception.mp4")
+        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         featurettes_path = os.path.join(self.test_dir, "Featurettes")
         os.makedirs(featurettes_path)
         with open(video_path, "w") as video_file:
@@ -593,7 +595,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_process_directory_removes_sample_file_and_folder(self, mock_tmdb):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
 
-        video_path = os.path.join(self.test_dir, "inception.mp4")
+        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         sample_file_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
         sample_folder_path = os.path.join(self.test_dir, "sample-footage")
         with open(video_path, "w") as video_file:
@@ -620,7 +622,7 @@ class TestMovieOrganizer(unittest.TestCase):
             "english_subtitles": False
         }
 
-        video_path = os.path.join(self.test_dir, "inception.mkv")
+        video_path = os.path.join(self.test_dir, "inception.BluRay.mkv")
         with open(video_path, "w") as video_file:
             video_file.write("test")
 
@@ -641,14 +643,14 @@ class TestMovieOrganizer(unittest.TestCase):
 
         movie_folder = os.path.join(self.test_dir, "Inception_Raw_Folder")
         os.makedirs(movie_folder)
-        video_file_path = os.path.join(movie_folder, "inception.mkv")
+        video_file_path = os.path.join(movie_folder, "inception.BluRay.mkv")
 
         with open(video_file_path, "w") as f:
             f.write("fake video data")
 
         new_folder_path = process_directory(movie_folder)
 
-        expected_folder_name = "Inception_(2010)_(1080p_Unknown_Source_DTS_5.1)"
+        expected_folder_name = "Inception_(2010)_(1080p_BluRay_DTS_5.1)"
         expected_folder_path = os.path.join(self.test_dir, expected_folder_name)
 
         self.assertEqual(new_folder_path, expected_folder_path)
@@ -672,7 +674,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mystery.mkv"), "w") as video_file:
+        with open(os.path.join(movie_folder, "mystery.2024.mkv"), "w") as video_file:
             video_file.write("fake video data")
 
         no_hit_path = process_directory(movie_folder)
@@ -687,7 +689,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertTrue(os.path.basename(no_hit_path).startswith("no_hit_"))
         self.assertIn(
-            "<original_filename>mystery.mkv</original_filename>",
+            "<original_filename>mystery.2024.mkv</original_filename>",
             nfo_contents
         )
         self.assertIn(
@@ -711,7 +713,7 @@ class TestMovieOrganizer(unittest.TestCase):
 
         movie_folder = os.path.join(self.test_dir, "Mystery Movie (2024) BluRay")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mystery.mkv"), "w") as video_file:
+        with open(os.path.join(movie_folder, "mystery.2024.mkv"), "w") as video_file:
             video_file.write("fake video data")
 
         no_hit_path = process_directory(movie_folder)
@@ -728,30 +730,47 @@ class TestMovieOrganizer(unittest.TestCase):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
 
-        for name, content in (("first.mkv", "first"), ("second.mkv", "second")):
+        for name, content in (("first.2010.BluRay.mkv", "first"), ("second.2010.BluRay.mkv", "second")):
             with open(os.path.join(self.test_dir, name), "w") as video_file:
                 video_file.write(content)
 
         process_directory(self.test_dir, is_root=True)
 
-        organized_name = "Inception_(2010)_(1080p_Unknown_Source_DTS_5.1)"
+        organized_name = "Inception_(2010)_(1080p_BluRay_DTS_5.1)"
         organized_file = os.path.join(self.test_dir, organized_name, f"{organized_name}.mkv")
         with open(organized_file) as video_file:
             winner = video_file.read()
         loser = "second" if winner == "first" else "first"
         self.assertIn(winner, ("first", "second"))
-        with open(os.path.join(self.test_dir, f"{loser}.mkv")) as video_file:
+        with open(os.path.join(self.test_dir, f"{loser}.2010.BluRay.mkv")) as video_file:
             self.assertEqual(video_file.read(), loser)
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_nfo_year_matches_folder_and_omits_unknown(self, mock_mkv, mock_tmdb):
+    def test_process_directory_skips_rename_when_a_tag_is_unknown(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        movie_dir = os.path.join(self.test_dir, "Inception 2010")
+        os.makedirs(movie_dir)
+        video_path = os.path.join(movie_dir, "inception.mkv")
+        with open(video_path, "w") as video_file:
+            video_file.write("x")
+
+        result = process_directory(movie_dir)
+
+        self.assertEqual(result, movie_dir)
+        self.assertTrue(os.path.exists(video_path))
+        self.assertEqual(os.listdir(movie_dir), ["inception.mkv"])
+        mock_tmdb.assert_not_called()
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_nfo_year_matches_folder_and_skips_unknown_year(self, mock_mkv, mock_tmdb):
         mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
 
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         hit_dir = os.path.join(self.test_dir, "Inception 2009 BluRay")
         os.makedirs(hit_dir)
-        with open(os.path.join(hit_dir, "a.mkv"), "w") as video_file:
+        with open(os.path.join(hit_dir, "a.2010.BluRay.mkv"), "w") as video_file:
             video_file.write("x")
         hit_path = process_directory(hit_dir)
         hit_nfo = [f for f in os.listdir(hit_path) if f.endswith(".nfo")][0]
@@ -760,11 +779,11 @@ class TestMovieOrganizer(unittest.TestCase):
         mock_tmdb.return_value = None
         miss_dir = os.path.join(self.test_dir, "Obscure Film")
         os.makedirs(miss_dir)
-        with open(os.path.join(miss_dir, "b.mkv"), "w") as video_file:
+        with open(os.path.join(miss_dir, "b.BluRay.mkv"), "w") as video_file:
             video_file.write("y")
         miss_path = process_directory(miss_dir)
-        miss_nfo = [f for f in os.listdir(miss_path) if f.endswith(".nfo")][0]
-        self.assertIsNone(ET.parse(os.path.join(miss_path, miss_nfo)).getroot().find("year"))
+        self.assertEqual(miss_path, miss_dir)
+        self.assertEqual(os.listdir(miss_dir), ["b.BluRay.mkv"])
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
@@ -778,12 +797,12 @@ class TestMovieOrganizer(unittest.TestCase):
 
         movie_folder = os.path.join(self.test_dir, "Mission_Raw_Folder")
         os.makedirs(movie_folder)
-        with open(os.path.join(movie_folder, "mission.mkv"), "w") as video_file:
+        with open(os.path.join(movie_folder, "mission.BluRay.mkv"), "w") as video_file:
             video_file.write("fake video data")
 
         new_folder_path = process_directory(movie_folder)
 
-        expected_folder_name = "Mission's_-_Impossible!_(1996)_(1080p_Unknown_Source_DTS_5.1)"
+        expected_folder_name = "Mission's_-_Impossible!_(1996)_(1080p_BluRay_DTS_5.1)"
         expected_folder_path = os.path.join(self.test_dir, expected_folder_name)
         expected_video_file = os.path.join(expected_folder_path, f"{expected_folder_name}.mkv")
 
