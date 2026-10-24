@@ -631,8 +631,11 @@ class FilenameParsingTests(TempDirTestCase):
 class ProcessDirectoryTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
-    def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
-        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_removes_txt_and_jpg_files(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = _mkv_info()
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
         txt_path = os.path.join(self.test_dir, "notes.TXT")
         jpg_path = os.path.join(self.test_dir, "poster.JPG")
         keep_path = os.path.join(self.test_dir, "keep.png")
@@ -644,17 +647,22 @@ class ProcessDirectoryTests(TempDirTestCase):
         self.assertFalse(os.path.exists(txt_path))
         self.assertFalse(os.path.exists(jpg_path))
         self.assertTrue(os.path.exists(keep_path))
-        mock_tmdb.assert_not_called()
+        mock_tmdb.assert_called_once()
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_skips_non_mkv_media(self, mock_tmdb):
         video_path = os.path.join(self.test_dir, "inception.avi")
-        _write(video_path, "test")
+        txt_path = os.path.join(self.test_dir, "notes.txt")
+        sample_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
+        for path in (video_path, txt_path, sample_path):
+            _write(path, "test")
 
         with patch('builtins.print') as mock_print:
             process_directory(self.test_dir, is_root=True)
 
         self.assertTrue(os.path.exists(video_path))
+        self.assertTrue(os.path.exists(txt_path))
+        self.assertTrue(os.path.exists(sample_path))
         mock_tmdb.assert_not_called()
         self.assertTrue(any("Skipping non-MKV media file" in call.args[0] for call in mock_print.call_args_list))
 
@@ -734,9 +742,12 @@ class ProcessDirectoryTests(TempDirTestCase):
             folder = f"Film_{year}_({year})_(1080p_BluRay_DTS_5.1)"
             self.assertEqual(os.path.getsize(os.path.join(self.test_dir, folder, f"{folder}.mkv")), size)
 
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
-    def test_process_directory_removes_featurettes_folder(self, mock_tmdb):
-        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
+    def test_process_directory_removes_featurettes_folder(self, mock_tmdb, mock_mkv):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info()
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
         featurettes_path = os.path.join(self.test_dir, "Featurettes")
         os.makedirs(featurettes_path)
         _write(video_path, "test")
@@ -745,11 +756,14 @@ class ProcessDirectoryTests(TempDirTestCase):
         process_directory(self.test_dir, is_root=True)
 
         self.assertFalse(os.path.exists(featurettes_path))
-        mock_tmdb.assert_not_called()
+        mock_tmdb.assert_called_once()
 
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
-    def test_process_directory_removes_sample_file_and_folder(self, mock_tmdb):
-        video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
+    def test_process_directory_removes_sample_file_and_folder(self, mock_tmdb, mock_mkv):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info()
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
         sample_file_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
         sample_folder_path = os.path.join(self.test_dir, "sample-footage")
         _write(video_path, "test")
@@ -761,7 +775,7 @@ class ProcessDirectoryTests(TempDirTestCase):
 
         self.assertFalse(os.path.exists(sample_file_path))
         self.assertFalse(os.path.exists(sample_folder_path))
-        mock_tmdb.assert_not_called()
+        mock_tmdb.assert_called_once()
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
@@ -896,10 +910,18 @@ class ProcessDirectoryTests(TempDirTestCase):
         os.makedirs(movie_dir)
         for name, size in (("a.2010.BluRay.mkv", 100), ("b.2010.BluRay.mkv", 150)):
             _write(os.path.join(movie_dir, name), b"x" * size)
+        _write(os.path.join(movie_dir, "notes.txt"), "keep")
+        sample_dir = os.path.join(movie_dir, "Sample")
+        os.makedirs(sample_dir)
+        _write(os.path.join(sample_dir, "clip.mp4"), "keep")
 
         self.assertEqual(process_directory(movie_dir), movie_dir)
 
-        self.assertEqual(sorted(os.listdir(movie_dir)), ["a.2010.BluRay.mkv", "b.2010.BluRay.mkv"])
+        self.assertEqual(
+            sorted(os.listdir(movie_dir)),
+            ["Sample", "a.2010.BluRay.mkv", "b.2010.BluRay.mkv", "notes.txt"],
+        )
+        self.assertTrue(os.path.exists(os.path.join(sample_dir, "clip.mp4")))
         mock_tmdb.assert_not_called()
 
     @patch('kodi_nfo_fiddler.search_tmdb')
@@ -909,13 +931,16 @@ class ProcessDirectoryTests(TempDirTestCase):
         movie_dir = os.path.join(self.test_dir, "Inception 2010")
         os.makedirs(movie_dir)
         video_path = os.path.join(movie_dir, "inception.mkv")
+        junk_path = os.path.join(movie_dir, "notes.txt")
         _write(video_path, "x")
+        _write(junk_path, "keep")
 
         result = process_directory(movie_dir)
 
         self.assertEqual(result, movie_dir)
         self.assertTrue(os.path.exists(video_path))
-        self.assertEqual(os.listdir(movie_dir), ["inception.mkv"])
+        self.assertTrue(os.path.exists(junk_path))
+        self.assertEqual(sorted(os.listdir(movie_dir)), ["inception.mkv", "notes.txt"])
         mock_tmdb.assert_not_called()
 
     @patch('kodi_nfo_fiddler.search_tmdb')
@@ -1020,6 +1045,43 @@ class ProcessDirectoryTests(TempDirTestCase):
             process_directory(self.test_dir, is_root=True)
 
         self.assertTrue(os.path.exists(video_path))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    @patch('kodi_nfo_fiddler.write_kodi_nfo', side_effect=OSError("denied"))
+    def test_process_directory_does_not_move_video_when_nfo_staging_fails(self, mock_write_nfo, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info()
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
+        junk_path = os.path.join(self.test_dir, "notes.txt")
+        _write(video_path, "video")
+        _write(junk_path, "keep")
+
+        with patch("builtins.print") as mock_print:
+            process_directory(self.test_dir, is_root=True)
+
+        self.assertTrue(os.path.isfile(video_path))
+        self.assertTrue(os.path.isfile(junk_path))
+        self.assertEqual(sorted(os.listdir(self.test_dir)), ["inception.2010.BluRay.mkv", "notes.txt"])
+        mock_write_nfo.assert_called_once()
+        self.assertTrue(any("Could not organize" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    @patch('kodi_nfo_fiddler.os.replace', side_effect=OSError("denied"))
+    def test_process_directory_rolls_video_back_when_nfo_finalize_fails(self, mock_replace, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info()
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
+        _write(video_path, "video")
+
+        with patch("builtins.print") as mock_print:
+            process_directory(self.test_dir, is_root=True)
+
+        self.assertTrue(os.path.isfile(video_path))
+        self.assertEqual(os.listdir(self.test_dir), [os.path.basename(video_path)])
+        mock_replace.assert_called_once()
+        self.assertTrue(any("Could not organize" in call.args[0] for call in mock_print.call_args_list))
 
 
 class TmdbSearchTests(TempDirTestCase):

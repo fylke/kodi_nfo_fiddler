@@ -48,7 +48,7 @@ For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. Loose videos in 
 - **No TMDB match:** the folder is prefixed with `no_hit_` and the NFO remembers the original names, so running the tool again retries the lookup. The year must still be known for the rename to happen.
 - **Several videos in one folder:** the largest video is treated as the movie. Smaller `.mkv` files are deleted when the largest is at least twice the size of the next one, and other smaller videos are left alone with a warning. If the two largest videos are within a factor of two of each other, the whole folder is skipped.
 - **Name collisions:** an existing file or folder with the target name is never overwritten; the item is skipped with a warning.
-- **Cleanup:** `.txt` and `.jpg` files, `Featurettes` folders and entries starting with `sample` are removed from the folders being processed.
+- **Cleanup:** after a video is successfully organized, `.txt` and `.jpg` files, `Featurettes` folders and entries starting with `sample` are removed from its folder. Folders skipped as ambiguous or lacking required metadata are left untouched.
 - **Non-MKV videos:** skipped unless you use `--remux-mp4` (below).
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.

@@ -500,7 +500,6 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         if stored_directory:
             original_directory = stored_directory
 
-    clean_directory(directory_path, is_root)
     video_files = get_video_files(directory_path)
     if not video_files:
         return None
@@ -562,20 +561,46 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
             continue
 
         print(f"[+] Setting asset to: {new_file_path}")
+        staged_nfo_path = os.path.join(
+            dest_dir,
+            f".kodi_nfo_fiddler_{uuid.uuid4().hex}.nfo",
+        )
+        created_dest_dir = not os.path.exists(dest_dir)
+        moved_video = False
         try:
             os.makedirs(dest_dir, exist_ok=True)
-            os.rename(file_path, new_file_path)
             write_kodi_nfo(
-                os.path.join(dest_dir, f"{new_name}.nfo"),
+                staged_nfo_path,
                 nfo_title,
                 year,
                 tmdb_id=tmdb_id,
                 original_filename=original_filename,
                 original_directory=original_directory,
             )
+            if new_file_path != file_path:
+                os.rename(file_path, new_file_path)
+                moved_video = True
+            os.replace(staged_nfo_path, os.path.join(dest_dir, f"{new_name}.nfo"))
         except OSError as e:
+            if moved_video:
+                try:
+                    os.rename(new_file_path, file_path)
+                except OSError as rollback_error:
+                    print_warning(f"Could not restore '{filename}' after organization failed: {rollback_error}")
+            if os.path.exists(staged_nfo_path):
+                try:
+                    os.remove(staged_nfo_path)
+                except OSError as cleanup_error:
+                    print_warning(f"Could not remove temporary NFO '{staged_nfo_path}': {cleanup_error}")
+            if created_dest_dir and os.path.isdir(dest_dir):
+                try:
+                    os.rmdir(dest_dir)
+                except OSError as cleanup_error:
+                    print_warning(f"Could not remove empty destination '{dest_dir}': {cleanup_error}")
             print_warning(f"Could not organize '{filename}': {e}")
             continue
+
+        clean_directory(directory_path, is_root)
 
         # A subdirectory is renamed to match its first video and then we're done
         if not is_root:
