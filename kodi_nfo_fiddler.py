@@ -6,14 +6,15 @@
 # ///
 
 import argparse
+import json
 import os
-import sys
 import re
 import shutil
-import json
 import subprocess
+import sys
 import uuid
 import xml.etree.ElementTree as ET
+
 import requests
 from dotenv import load_dotenv
 
@@ -132,7 +133,7 @@ def remux_mp4_to_mkv(mp4_path):
         ])
 
     try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(command, capture_output=True, text=True)
         # mkvmerge exits with 1 when it finished but had warnings; 2 means failure
         if result.returncode <= 1 and os.path.isfile(output_path):
             if result.returncode == 1:
@@ -141,7 +142,11 @@ def remux_mp4_to_mkv(mp4_path):
             for leftover_path in [mp4_path] + [path for path, _ in ordered_subtitles]:
                 os.remove(leftover_path)
             return output_path
-        error_details = result.stdout.strip() or result.stderr.strip() or f"mkvmerge exited with code {result.returncode}"
+        error_details = (
+            result.stdout.strip()
+            or result.stderr.strip()
+            or f"mkvmerge exited with code {result.returncode}"
+        )
     except OSError as error:
         error_details = error
 
@@ -202,8 +207,7 @@ def read_mkv_tracks(filepath):
     try:
         result = subprocess.run(
             ["mkvmerge", "-J", filepath],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=True
         )
@@ -326,7 +330,10 @@ def collect_metadata(name, file_path):
 def get_video_files(directory):
     """Returns a list of video files in the given directory (non-recursive)."""
     try:
-        return [f for f in os.listdir(directory) if f.lower().endswith(MEDIA_EXTENSIONS) and os.path.isfile(os.path.join(directory, f))]
+        return [
+            f for f in os.listdir(directory)
+            if f.lower().endswith(MEDIA_EXTENSIONS) and os.path.isfile(os.path.join(directory, f))
+        ]
     except OSError as e:
         print_warning(f"Could not list '{directory}': {e}")
         return []
@@ -720,7 +727,8 @@ def write_kodi_tvshow_nfo(path, show):
         fields.append(("title", show["title"], {}))
     if show.get("year"):
         fields.append(("year", show["year"], {}))
-    unique_ids = [(id_type, show[key]) for id_type, key in (("tvdb", "tvdb_id"), ("tmdb", "tmdb_id"), ("imdb", "imdb_id")) if show.get(key)]
+    id_keys = (("tvdb", "tvdb_id"), ("tmdb", "tmdb_id"), ("imdb", "imdb_id"))
+    unique_ids = [(id_type, show[key]) for id_type, key in id_keys if show.get(key)]
     for index, (id_type, value) in enumerate(unique_ids):
         attributes = {"type": id_type, **({"default": "true"} if index == 0 else {})}
         fields.append(("uniqueid", value, attributes))
@@ -764,7 +772,10 @@ def upgrade_tvshow_nfo(path, text):
         show[key] = show.get(key) or value
     write_kodi_tvshow_nfo(path, show)
 
-    print(f"[+] Upgraded TV show NFO: {path} -> TVDB {show.get('tvdb_id') or 'n/a'}, TMDB {show.get('tmdb_id') or 'n/a'}")
+    print(
+        f"[+] Upgraded TV show NFO: {path} -> "
+        f"TVDB {show.get('tvdb_id') or 'n/a'}, TMDB {show.get('tmdb_id') or 'n/a'}"
+    )
     return "upgraded"
 
 def upgrade_movie_nfo(path, text):
@@ -819,7 +830,10 @@ def upgrade_nfo_files(directory):
             if filename.lower().endswith(".nfo"):
                 counts[upgrade_nfo_file(os.path.join(current_dir, filename))] += 1
 
-    print(f"NFO upgrade complete: {counts['upgraded']} upgraded, {counts['skipped']} skipped, {counts['failed']} failed")
+    print(
+        f"NFO upgrade complete: {counts['upgraded']} upgraded, "
+        f"{counts['skipped']} skipped, {counts['failed']} failed"
+    )
     return counts
 
 
@@ -845,7 +859,10 @@ def main():
     parser.add_argument(
         "--upgrade-nfo",
         action="store_true",
-        help="recursively upgrade plain-text NFO files to Kodi XML (movie NFOs get a TMDB id, tvshow.nfo gets a TVDB id), then exit",
+        help=(
+            "recursively upgrade plain-text NFO files to Kodi XML "
+            "(movie NFOs get a TMDB id, tvshow.nfo gets a TVDB id), then exit"
+        ),
     )
     args = parser.parse_args()
     target_dir = args.directory

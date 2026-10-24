@@ -1,31 +1,33 @@
-import os
 import json
+import os
 import shutil
 import tempfile
 import unittest
-import requests
-import subprocess
 import xml.etree.ElementTree as ET
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import requests
 
 from kodi_nfo_fiddler import (
-    get_mkv_metadata,
-    collect_metadata,
-    parse_filename,
-    sanitize_folder_name,
+    MEDIA_EXTENSIONS,
     build_new_name,
-    search_tmdb,
-    process_directory,
-    print_warning,
-    find_sidecar_subtitles,
-    is_language,
-    detect_source,
     classify_resolution,
+    collect_metadata,
     describe_audio,
+    detect_source,
+    find_sidecar_subtitles,
+    get_mkv_metadata,
+    is_language,
+    parse_filename,
+    print_warning,
+    process_directory,
     remux_mp4_to_mkv,
+    sanitize_folder_name,
+    search_tmdb,
     upgrade_nfo_file,
     upgrade_nfo_files,
 )
+
 
 def _movie(tmdb_id, title, year):
     return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": None}
@@ -276,7 +278,8 @@ class SubtitleAndRemuxTests(TempDirTestCase):
         self.assertIn("0:eng", command)
         self.assertIn("0:swe", command)
         self.assertEqual(command[command.index("--default-track-flag") + 1], "0:yes")
-        self.assertEqual(command[command.index("--default-track-flag", command.index("--default-track-flag") + 1) + 1], "0:no")
+        first_flag = command.index("--default-track-flag")
+        self.assertEqual(command[command.index("--default-track-flag", first_flag + 1) + 1], "0:no")
 
     @patch("kodi_nfo_fiddler.subprocess.run")
     def test_remux_mp4_failure_keeps_source_and_subtitles(self, mock_run):
@@ -480,7 +483,12 @@ class FilenameParsingTests(TempDirTestCase):
                 self.assertEqual(detect_source(text), source)
 
     def test_parse_filename_cuts_title_at_any_source_or_resolution_tag_without_year(self):
-        for name in ("Some Movie 720p.mkv", "Some Movie HDTV x264.mkv", "Some Movie.WEB-DL.mkv", "Some.Movie.Blu-Ray.mkv"):
+        for name in (
+            "Some Movie 720p.mkv",
+            "Some Movie HDTV x264.mkv",
+            "Some Movie.WEB-DL.mkv",
+            "Some.Movie.Blu-Ray.mkv",
+        ):
             with self.subTest(name=name):
                 self.assertEqual(parse_filename(name, name)["title"], "Some Movie")
 
@@ -539,7 +547,7 @@ class FilenameParsingTests(TempDirTestCase):
             with self.subTest(source=source):
                 metadata = parse_filename(
                     f"Movie.2024.1080p.{source}.mkv",
-                    "Movie.2024.1080p.{0}.mkv".format(source)
+                    f"Movie.2024.1080p.{source}.mkv"
                 )
                 self.assertEqual(metadata["source"], "WEBRip")
 
@@ -666,7 +674,7 @@ class ProcessDirectoryTests(TempDirTestCase):
 
         self.assertFalse(os.path.exists(small_path))
         self.assertEqual(
-            [name for name in os.listdir(processed_dir) if name.lower().endswith((".mp4", ".mkv", ".avi", ".m4v", ".mov", ".flv", ".wmv"))],
+            [name for name in os.listdir(processed_dir) if name.lower().endswith(MEDIA_EXTENSIONS)],
             [os.path.basename(processed_dir) + ".mkv"]
         )
 

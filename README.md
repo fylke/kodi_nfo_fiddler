@@ -82,3 +82,9 @@ Open the repository in VS Code and choose **Reopen in Container**. Once the cont
 ```bash
 python -m unittest -v
 ```
+
+Lint with [ruff](https://docs.astral.sh/ruff/) (configured in `pyproject.toml`):
+
+```bash
+ruff check .
+```
