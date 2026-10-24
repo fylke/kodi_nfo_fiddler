@@ -62,7 +62,7 @@ python3 kodi_nfo_fiddler.py --upgrade-nfo /path/to/movies
 ```
 
 - **Movies:** an NFO containing only an IMDB or TMDB movie link becomes a Kodi `<movie>` NFO with a TMDB `uniqueid` (the IMDB id is kept as a second `uniqueid`). IMDB links are resolved through the TMDB API.
-- **TV shows:** a plain-text `tvshow.nfo` containing an IMDB, TMDB (`/tv/`) or TVDB (`?tab=series&id=` / `dereferrer/series/`) link becomes a Kodi `<tvshow>` NFO. TheTVDB is Kodi's default TV scraper, so the TVDB id is written as the default `uniqueid`, with TMDB and IMDB ids alongside. The TVDB id is looked up through the TMDB API. Per-episode NFOs are not touched.
+- **TV shows:** a plain-text `tvshow.nfo` containing an IMDB, TMDB (`/tv/`) or TVDB (`?tab=series&id=` / `dereferrer/series/`) link becomes a Kodi `<tvshow>` NFO. Any other NFO file name with a TMDB `/tv/` or TVDB link is upgraded the same way and written as `tvshow.nfo` (the misnamed file is removed; if a `tvshow.nfo` already exists it is skipped), because Kodi only reads show metadata from `tvshow.nfo`. A bare IMDB link in a differently named file is treated as a movie. TheTVDB is Kodi's default TV scraper, so the TVDB id is written as the default `uniqueid`, with TMDB and IMDB ids alongside. The TVDB id is looked up through the TMDB API. Per-episode NFOs are not touched.
 - NFOs that are already XML are left alone, as are files TMDB cannot match.
 
 ## Remuxing MP4 files

@@ -826,7 +826,8 @@ def upgrade_movie_nfo(path, text):
 
 def upgrade_nfo_file(path):
     """
-    Upgrades a plain-text NFO (a bare IMDB/TMDB link, or for tvshow.nfo also TVDB) to Kodi XML format.
+    Upgrades a plain-text NFO (a bare IMDB/TMDB link, or a TVDB link) to Kodi XML format. TMDB /tv/ and TVDB
+    links, and any link in tvshow.nfo, produce a tvshow NFO; other links produce a movie NFO.
     Returns "upgraded", "skipped" (already XML or no recognizable link) or "failed".
     """
     try:
@@ -840,9 +841,27 @@ def upgrade_nfo_file(path):
     if text.lstrip().startswith("<"):
         return "skipped"
 
-    upgrade = upgrade_tvshow_nfo if os.path.basename(path).lower() == "tvshow.nfo" else upgrade_movie_nfo
+    # An IMDB id alone can't say movie or show, so only the file name decides then; TMDB /tv/ and TVDB links are TV.
+    is_tvshow = (
+        os.path.basename(path).lower() == "tvshow.nfo"
+        or TMDB_TV_URL_PATTERN.search(text)
+        or TVDB_ID_PATTERN.search(text)
+    )
     try:
-        return upgrade(path, text)
+        if not is_tvshow:
+            return upgrade_movie_nfo(path, text)
+        if os.path.basename(path).lower() == "tvshow.nfo":
+            return upgrade_tvshow_nfo(path, text)
+
+        # Kodi only reads show metadata from tvshow.nfo, so write it there and drop the misnamed file.
+        target = os.path.join(os.path.dirname(path), "tvshow.nfo")
+        if os.path.exists(target):
+            print_warning(f"'{target}' already exists; leaving '{path}' unchanged.")
+            return "skipped"
+        result = upgrade_tvshow_nfo(target, text)
+        if result == "upgraded":
+            os.remove(path)
+        return result
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
         print_warning(f"Failed to upgrade '{path}': {e}")
         return "failed"

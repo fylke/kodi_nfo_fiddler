@@ -171,6 +171,34 @@ class NfoUpgradeTests(TempDirTestCase):
         self.assertEqual(ET.parse(path).getroot().find("uniqueid[@type='tvdb']").text, "81189")
 
     @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_renames_misnamed_tv_link_to_tvshow_nfo(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "id": 68421, "name": "Altered Carbon", "first_air_date": "2018-02-02",
+            "external_ids": {"tvdb_id": 332638, "imdb_id": "tt2261227"},
+        })
+        path = self._write_nfo("Altered_Carbon/Altered_Carbon.nfo", "https://www.themoviedb.org/tv/68421-altered-carbon\n")
+        target = os.path.join(os.path.dirname(path), "tvshow.nfo")
+
+        self.assertEqual(upgrade_nfo_file(path), "upgraded")
+
+        self.assertFalse(os.path.exists(path))
+        root = ET.parse(target).getroot()
+        self.assertEqual(root.tag, "tvshow")
+        self.assertEqual(root.find("uniqueid[@type='tvdb']").text, "332638")
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_upgrade_nfo_file_does_not_overwrite_existing_tvshow_nfo(self, mock_get):
+        path = self._write_nfo("Show/Show.nfo", "https://www.themoviedb.org/tv/68421-altered-carbon\n")
+        existing = self._write_nfo("Show/tvshow.nfo", "<tvshow><title>Keep</title></tvshow>")
+
+        self.assertEqual(upgrade_nfo_file(path), "skipped")
+
+        self.assertTrue(os.path.exists(path))
+        with open(existing, encoding="utf-8") as nfo:
+            self.assertIn("Keep", nfo.read())
+        mock_get.assert_not_called()
+
+    @patch("kodi_nfo_fiddler.requests.get")
     def test_upgrade_tvshow_nfo_uses_tvdb_link_id(self, mock_get):
         mock_get.side_effect = [
             self._tmdb_response({"tv_results": []}),
