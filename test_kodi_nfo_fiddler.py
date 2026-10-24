@@ -720,6 +720,51 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(mock_tmdb.call_args_list[1].args[:2], ("Mystery Movie", "2024"))
         self.assertEqual(os.path.basename(recovered_path).startswith("no_hit_"), False)
         self.assertIn("Mystery_Movie_(2024)", os.path.basename(recovered_path))
+        self.assertIn("1080p_BluRay_DTS_5.1", os.path.basename(recovered_path))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_skips_file_when_destination_exists(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+
+        for name, content in (("first.mkv", "first"), ("second.mkv", "second")):
+            with open(os.path.join(self.test_dir, name), "w") as video_file:
+                video_file.write(content)
+
+        process_directory(self.test_dir, is_root=True)
+
+        organized_name = "Inception_(2010)_(1080p_Unknown_Source_DTS_5.1)"
+        organized_file = os.path.join(self.test_dir, organized_name, f"{organized_name}.mkv")
+        with open(organized_file) as video_file:
+            winner = video_file.read()
+        loser = "second" if winner == "first" else "first"
+        self.assertIn(winner, ("first", "second"))
+        with open(os.path.join(self.test_dir, f"{loser}.mkv")) as video_file:
+            self.assertEqual(video_file.read(), loser)
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_nfo_year_matches_folder_and_omits_unknown(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        hit_dir = os.path.join(self.test_dir, "Inception 2009 BluRay")
+        os.makedirs(hit_dir)
+        with open(os.path.join(hit_dir, "a.mkv"), "w") as video_file:
+            video_file.write("x")
+        hit_path = process_directory(hit_dir)
+        hit_nfo = [f for f in os.listdir(hit_path) if f.endswith(".nfo")][0]
+        self.assertEqual(ET.parse(os.path.join(hit_path, hit_nfo)).getroot().findtext("year"), "2010")
+
+        mock_tmdb.return_value = None
+        miss_dir = os.path.join(self.test_dir, "Obscure Film")
+        os.makedirs(miss_dir)
+        with open(os.path.join(miss_dir, "b.mkv"), "w") as video_file:
+            video_file.write("y")
+        miss_path = process_directory(miss_dir)
+        miss_nfo = [f for f in os.listdir(miss_path) if f.endswith(".nfo")][0]
+        self.assertIsNone(ET.parse(os.path.join(miss_path, miss_nfo)).getroot().find("year"))
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')

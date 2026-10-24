@@ -299,8 +299,9 @@ def parse_filename(filename, file_path):
     parent_name = os.path.basename(os.path.dirname(file_path))
     metadata["source"] = detect_source(clean_name) or detect_source(parent_name) or "Unknown Source"
 
-    # If the file is an MKV, populate pristine technical parameters directly from the tracks
-    if filename.lower().endswith('.mkv'):
+    # If the file is an MKV, populate pristine technical parameters directly from the tracks.
+    # Check the real path: `filename` may be a stored directory name when retrying a no-hit.
+    if file_path.lower().endswith('.mkv'):
         mkv_meta = get_mkv_metadata(file_path)
         if mkv_meta:
             metadata.update(mkv_meta)
@@ -453,6 +454,9 @@ def rename_directory(directory_path, new_name):
 
     # Guard against overwriting if name is already perfectly normalized
     if directory_path != final_path:
+        if os.path.exists(final_path):
+            print_warning(f"Cannot rename '{os.path.basename(directory_path)}': '{new_name}' already exists.")
+            return directory_path
         print(f"[+] Renaming directory from '{os.path.basename(directory_path)}' to '{new_name}'")
         try:
             os.rename(directory_path, final_path)
@@ -493,20 +497,22 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         new_name = build_new_name(metadata, folder_title, year)
 
         # Loose files in the root get a new folder; files in an existing subdirectory stay put
-        if is_root:
-            dest_dir = os.path.join(directory_path, new_name)
-            os.makedirs(dest_dir, exist_ok=True)
-        else:
-            dest_dir = directory_path
-
+        dest_dir = os.path.join(directory_path, new_name) if is_root else directory_path
         new_file_path = os.path.join(dest_dir, f"{new_name}{os.path.splitext(filename)[1]}")
+
+        # os.rename would silently replace an existing file
+        if new_file_path != file_path and os.path.exists(new_file_path):
+            print_warning(f"'{new_file_path}' already exists. Skipping '{filename}'.")
+            continue
+
+        os.makedirs(dest_dir, exist_ok=True)
         print(f"[+] Setting asset to: {new_file_path}")
         os.rename(file_path, new_file_path)
 
         write_kodi_nfo(
             os.path.join(dest_dir, f"{new_name}.nfo"),
             nfo_title,
-            metadata['year'],
+            year if re.fullmatch(r"\d{4}", year) else None,
             tmdb_id=tmdb_id,
             original_filename=original_filename,
             original_directory=original_directory,
