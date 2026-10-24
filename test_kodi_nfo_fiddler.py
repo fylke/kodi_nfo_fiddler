@@ -3,6 +3,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import requests
 import subprocess
 import xml.etree.ElementTree as ET
 from unittest.mock import patch, MagicMock
@@ -310,7 +311,7 @@ class TestMovieOrganizer(unittest.TestCase):
             output_index = command.index("-o") + 1
             with open(command[output_index], "w") as output:
                 output.write("mkv")
-            return MagicMock()
+            return MagicMock(returncode=0)
 
         mock_run.side_effect = create_output
 
@@ -318,8 +319,8 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertIsNotNone(output_path)
         self.assertFalse(os.path.exists(mp4_path))
-        self.assertTrue(os.path.exists(english_path))
-        self.assertTrue(os.path.exists(swedish_path))
+        self.assertFalse(os.path.exists(english_path))
+        self.assertFalse(os.path.exists(swedish_path))
         command = mock_run.call_args.args[0]
         self.assertLess(command.index(english_path), command.index(swedish_path))
         self.assertIn("0:eng", command)
@@ -327,14 +328,38 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(command[command.index("--default-track-flag") + 1], "0:yes")
         self.assertEqual(command[command.index("--default-track-flag", command.index("--default-track-flag") + 1) + 1], "0:no")
 
-    @patch("kodi_nfo_fiddler.subprocess.run", side_effect=subprocess.CalledProcessError(1, "mkvmerge"))
-    def test_remux_mp4_failure_keeps_source(self, mock_run):
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_remux_mp4_failure_keeps_source_and_subtitles(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=2, stdout="Error: boom", stderr="")
+        mp4_path = os.path.join(self.test_dir, "Movie.mp4")
+        subtitle_path = os.path.join(self.test_dir, "Movie.en.srt")
+        for path in (mp4_path, subtitle_path):
+            with open(path, "w") as file:
+                file.write("video")
+
+        self.assertIsNone(remux_mp4_to_mkv(mp4_path))
+        self.assertTrue(os.path.exists(mp4_path))
+        self.assertTrue(os.path.exists(subtitle_path))
+
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_remux_mp4_accepts_mkvmerge_warnings(self, mock_run):
         mp4_path = os.path.join(self.test_dir, "Movie.mp4")
         with open(mp4_path, "w") as file:
             file.write("video")
 
-        self.assertIsNone(remux_mp4_to_mkv(mp4_path))
-        self.assertTrue(os.path.exists(mp4_path))
+        def create_output(command, **kwargs):
+            with open(command[command.index("-o") + 1], "w") as output:
+                output.write("mkv")
+            return MagicMock(returncode=1, stdout="Warning: odd timestamps", stderr="")
+
+        mock_run.side_effect = create_output
+
+        with patch("builtins.print") as mock_print:
+            output_path = remux_mp4_to_mkv(mp4_path)
+
+        self.assertIsNotNone(output_path)
+        self.assertFalse(os.path.exists(mp4_path))
+        self.assertTrue(any("warnings" in call.args[0] for call in mock_print.call_args_list))
 
     @patch('subprocess.run')
     def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
@@ -528,14 +553,14 @@ class TestMovieOrganizer(unittest.TestCase):
         def create_output(command, **kwargs):
             with open(command[command.index("-o") + 1], "w") as output:
                 output.write("mkv")
-            return MagicMock()
+            return MagicMock(returncode=0)
 
         mock_run.side_effect = create_output
 
         process_directory(self.test_dir, is_root=True, remux_mp4=True)
 
         self.assertFalse(os.path.exists(video_path))
-        self.assertTrue(os.path.exists(subtitle_path))
+        self.assertFalse(os.path.exists(subtitle_path))
         organized_files = [
             filename for _, _, filenames in os.walk(self.test_dir)
             for filename in filenames
@@ -994,6 +1019,26 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertNotIn("year", params)
         self.assertNotIn("primary_release_year", params)
         self.assertNotIn("api_key", params)
-        
+
+    @patch('kodi_nfo_fiddler.requests.get', side_effect=requests.ConnectionError("down"))
+    def test_search_tmdb_warns_and_returns_none_on_network_error(self, mock_get):
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(search_tmdb("Inception", "2010"))
+        self.assertTrue(any("TMDB search failed" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_warns_and_continues_when_rename_fails(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
+        with open(video_path, "w") as video_file:
+            video_file.write("x")
+
+        with patch("kodi_nfo_fiddler.os.rename", side_effect=OSError("denied")):
+            process_directory(self.test_dir, is_root=True)
+
+        self.assertTrue(os.path.exists(video_path))
+
 if __name__ == '__main__':
     unittest.main()

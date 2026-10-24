@@ -135,19 +135,18 @@ def remux_mp4_to_mkv(mp4_path):
         ])
 
     try:
-        subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-        )
-        if os.path.isfile(output_path):
-            os.remove(mp4_path)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # mkvmerge exits with 1 when it finished but had warnings; 2 means failure
+        if result.returncode <= 1 and os.path.isfile(output_path):
+            if result.returncode == 1:
+                print_warning(f"mkvmerge reported warnings for '{os.path.basename(mp4_path)}': {result.stdout.strip()}")
+            # The subtitles are embedded now, so the sidecar files would only be orphaned
+            for leftover_path in [mp4_path] + [path for path, _ in ordered_subtitles]:
+                os.remove(leftover_path)
             return output_path
-        error_details = "mkvmerge completed without creating an output file"
-    except (OSError, subprocess.CalledProcessError) as error:
-        error_details = getattr(error, "stderr", None) or error
+        error_details = result.stdout.strip() or result.stderr.strip() or f"mkvmerge exited with code {result.returncode}"
+    except OSError as error:
+        error_details = error
 
     print_warning(f"Failed to convert '{os.path.basename(mp4_path)}' to MKV: {error_details}")
     if os.path.exists(output_path):
@@ -342,20 +341,23 @@ def remove_smaller_video_files(directory):
     if len(video_files) < 2:
         return
 
-    files_by_size = sorted(
-        video_files,
-        key=lambda filename: os.path.getsize(os.path.join(directory, filename)),
-        reverse=True
-    )
-    largest_size = os.path.getsize(os.path.join(directory, files_by_size[0]))
-    second_largest_size = os.path.getsize(os.path.join(directory, files_by_size[1]))
-    if largest_size < 2 * second_largest_size:
-        return
+    try:
+        files_by_size = sorted(
+            video_files,
+            key=lambda filename: os.path.getsize(os.path.join(directory, filename)),
+            reverse=True
+        )
+        largest_size = os.path.getsize(os.path.join(directory, files_by_size[0]))
+        second_largest_size = os.path.getsize(os.path.join(directory, files_by_size[1]))
+        if largest_size < 2 * second_largest_size:
+            return
 
-    for filename in files_by_size[1:]:
-        file_path = os.path.join(directory, filename)
-        print(f"[+] Removing smaller video file: {filename}")
-        os.remove(file_path)
+        for filename in files_by_size[1:]:
+            file_path = os.path.join(directory, filename)
+            print(f"[+] Removing smaller video file: {filename}")
+            os.remove(file_path)
+    except OSError as e:
+        print_warning(f"Could not remove smaller videos in '{directory}': {e}")
 
 def remove_unwanted_files(directory):
     """Removes TXT and JPG files from the given directory (non-recursive)."""
@@ -399,7 +401,13 @@ def sanitize_folder_name(name):
 
 def get_original_directory(directory_path):
     """Reads the original directory name from an existing NFO, if available."""
-    for filename in os.listdir(directory_path):
+    try:
+        filenames = os.listdir(directory_path)
+    except OSError as e:
+        print_warning(f"Could not list '{directory_path}': {e}")
+        return None
+
+    for filename in filenames:
         if not filename.lower().endswith('.nfo'):
             continue
 
@@ -477,7 +485,7 @@ def rename_directory(directory_path, new_name):
             os.rename(directory_path, final_path)
             return final_path
         except OSError as e:
-            print(f"[-] Directory rename failed: {e}")
+            print_warning(f"Directory rename failed: {e}")
     return directory_path
 
 def process_directory(directory_path, is_root=False, remux_mp4=False):
@@ -550,18 +558,21 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
             print_warning(f"'{new_file_path}' already exists. Skipping '{filename}'.")
             continue
 
-        os.makedirs(dest_dir, exist_ok=True)
         print(f"[+] Setting asset to: {new_file_path}")
-        os.rename(file_path, new_file_path)
-
-        write_kodi_nfo(
-            os.path.join(dest_dir, f"{new_name}.nfo"),
-            nfo_title,
-            year,
-            tmdb_id=tmdb_id,
-            original_filename=original_filename,
-            original_directory=original_directory,
-        )
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            os.rename(file_path, new_file_path)
+            write_kodi_nfo(
+                os.path.join(dest_dir, f"{new_name}.nfo"),
+                nfo_title,
+                year,
+                tmdb_id=tmdb_id,
+                original_filename=original_filename,
+                original_directory=original_directory,
+            )
+        except OSError as e:
+            print_warning(f"Could not organize '{filename}': {e}")
+            continue
 
         # A subdirectory is renamed to match its first video and then we're done
         if not is_root:
@@ -649,8 +660,8 @@ def search_tmdb(title, year):
             if results:
                 return _movie_details(results[0])
 
-    except Exception as e:
-        print(f"[-] Network error querying TMDB: {e}")
+    except (requests.RequestException, KeyError, ValueError) as e:
+        print_warning(f"TMDB search failed: {e}")
 
     return None
 
@@ -738,30 +749,47 @@ def upgrade_tvshow_nfo(path, text):
         "imdb_id": imdb_match.group(1) if imdb_match else None,
     }
 
-    try:
-        tmdb_id = tmdb_match.group(1) if tmdb_match else None
-        if tmdb_id is None and linked_ids["tvdb_id"]:
-            tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["tvdb_id"], "tvdb_id")
-        if tmdb_id is None and linked_ids["imdb_id"]:
-            tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["imdb_id"], "imdb_id")
+    tmdb_id = tmdb_match.group(1) if tmdb_match else None
+    if tmdb_id is None and linked_ids["tvdb_id"]:
+        tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["tvdb_id"], "tvdb_id")
+    if tmdb_id is None and linked_ids["imdb_id"]:
+        tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["imdb_id"], "imdb_id")
 
-        show = lookup_tmdb_tv(tmdb_id) if tmdb_id else None
-        if show is None:
-            if not linked_ids["tvdb_id"]:
-                print_warning(f"No TMDB TV show found for '{path}'. Leaving it unchanged.")
-                return "failed"
-            # TVDB id is already what Kodi wants; write it without TMDB enrichment.
-            show = {}
+    show = lookup_tmdb_tv(tmdb_id) if tmdb_id else None
+    if show is None:
+        if not linked_ids["tvdb_id"]:
+            print_warning(f"No TMDB TV show found for '{path}'. Leaving it unchanged.")
+            return "failed"
+        # TVDB id is already what Kodi wants; write it without TMDB enrichment.
+        show = {}
 
-        # Ids from the original link fill any gaps TMDB left
-        for key, value in linked_ids.items():
-            show[key] = show.get(key) or value
-        write_kodi_tvshow_nfo(path, show)
-    except (requests.RequestException, KeyError, ValueError, OSError) as e:
-        print_warning(f"Failed to upgrade '{path}': {e}")
-        return "failed"
+    # Ids from the original link fill any gaps TMDB left
+    for key, value in linked_ids.items():
+        show[key] = show.get(key) or value
+    write_kodi_tvshow_nfo(path, show)
 
     print(f"[+] Upgraded TV show NFO: {path} -> TVDB {show.get('tvdb_id') or 'n/a'}, TMDB {show.get('tmdb_id') or 'n/a'}")
+    return "upgraded"
+
+def upgrade_movie_nfo(path, text):
+    """Upgrades a plain-text movie NFO link. Returns "upgraded", "skipped" or "failed"."""
+    imdb_match = IMDB_ID_PATTERN.search(text)
+    tmdb_match = TMDB_MOVIE_URL_PATTERN.search(text)
+    if not imdb_match and not tmdb_match:
+        print_warning(f"No IMDB or TMDB link found in '{path}'. Leaving it unchanged.")
+        return "skipped"
+
+    if tmdb_match:
+        movie = lookup_tmdb_by_id(tmdb_match.group(1))
+        movie["imdb_id"] = movie["imdb_id"] or (imdb_match.group(1) if imdb_match else None)
+    else:
+        movie = lookup_tmdb_by_imdb_id(imdb_match.group(1))
+        if movie is None:
+            print_warning(f"No TMDB movie found for {imdb_match.group(1)} in '{path}'. Leaving it unchanged.")
+            return "failed"
+    write_kodi_nfo(path, movie["title"], movie["year"], tmdb_id=movie["tmdb_id"], imdb_id=movie["imdb_id"])
+
+    print(f"[+] Upgraded NFO: {path} -> TMDB {movie['tmdb_id']} ({movie['title']})")
     return "upgraded"
 
 def upgrade_nfo_file(path):
@@ -780,31 +808,12 @@ def upgrade_nfo_file(path):
     if text.lstrip().startswith("<"):
         return "skipped"
 
-    if os.path.basename(path).lower() == "tvshow.nfo":
-        return upgrade_tvshow_nfo(path, text)
-
-    imdb_match = IMDB_ID_PATTERN.search(text)
-    tmdb_match = TMDB_MOVIE_URL_PATTERN.search(text)
-    if not imdb_match and not tmdb_match:
-        print_warning(f"No IMDB or TMDB link found in '{path}'. Leaving it unchanged.")
-        return "skipped"
-
+    upgrade = upgrade_tvshow_nfo if os.path.basename(path).lower() == "tvshow.nfo" else upgrade_movie_nfo
     try:
-        if tmdb_match:
-            movie = lookup_tmdb_by_id(tmdb_match.group(1))
-            movie["imdb_id"] = movie["imdb_id"] or (imdb_match.group(1) if imdb_match else None)
-        else:
-            movie = lookup_tmdb_by_imdb_id(imdb_match.group(1))
-            if movie is None:
-                print_warning(f"No TMDB movie found for {imdb_match.group(1)} in '{path}'. Leaving it unchanged.")
-                return "failed"
-        write_kodi_nfo(path, movie["title"], movie["year"], tmdb_id=movie["tmdb_id"], imdb_id=movie["imdb_id"])
+        return upgrade(path, text)
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
         print_warning(f"Failed to upgrade '{path}': {e}")
         return "failed"
-
-    print(f"[+] Upgraded NFO: {path} -> TMDB {movie['tmdb_id']} ({movie['title']})")
-    return "upgraded"
 
 def upgrade_nfo_files(directory):
     """Recursively upgrades legacy plain-text NFO files under the given directory."""
@@ -860,8 +869,8 @@ def main():
             for d in os.listdir(target_dir)
             if os.path.isdir(os.path.join(target_dir, d)) and not d.startswith('.')
         ]
-    except Exception as e:
-        print(f"Error scanning initial subdirectories: {e}")
+    except OSError as e:
+        print_warning(f"Could not scan initial subdirectories: {e}")
         existing_subdirs = []
 
     # 2. Process loose video files sitting directly in the root directory (Creates subdirs)

@@ -50,7 +50,7 @@ Remux MP4 files into MKV with `--remux-mp4` (without it, MP4 files are skipped):
 python3 kodi_nfo_fiddler.py --remux-mp4 /path/to/movies
 ```
 
-With the flag, MP4 files are remuxed into MKV containers without re-encoding. Matching sidecar subtitles whose filenames contain an English (`en`, `eng`, `english`) or Swedish (`sv`, `swe`, `swedish`, `svenska`) language tag are included; English tracks are ordered first and set as the default when present. The source MP4 is removed only after a successful conversion. Subtitle sidecars remain in place.
+With the flag, MP4 files are remuxed into MKV containers without re-encoding. Matching sidecar subtitles whose filenames contain an English (`en`, `eng`, `english`) or Swedish (`sv`, `swe`, `swedish`, `svenska`) language tag are included; English tracks are ordered first and set as the default when present. The source MP4 and the subtitle sidecars that were included are removed only after a successful conversion; mkvmerge warnings (exit code 1) still count as success.
 
 ## Dev container
 
