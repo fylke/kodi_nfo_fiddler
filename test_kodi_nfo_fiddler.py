@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -294,6 +295,23 @@ class SubtitleAndRemuxTests(TempDirTestCase):
         self.assertTrue(os.path.exists(subtitle_path))
 
     @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_remux_mp4_missing_output_keeps_source_and_subtitles(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mp4_path = os.path.join(self.test_dir, "Movie.mp4")
+        subtitle_path = os.path.join(self.test_dir, "Movie.en.srt")
+        for path in (mp4_path, subtitle_path):
+            _write(path, "video")
+
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(remux_mp4_to_mkv(mp4_path))
+
+        self.assertTrue(os.path.exists(mp4_path))
+        self.assertTrue(os.path.exists(subtitle_path))
+        output_path = mock_run.call_args.args[0][mock_run.call_args.args[0].index("-o") + 1]
+        self.assertFalse(os.path.exists(output_path))
+        self.assertTrue(any("Failed to convert" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch("kodi_nfo_fiddler.subprocess.run")
     def test_remux_mp4_accepts_mkvmerge_warnings(self, mock_run):
         mp4_path = os.path.join(self.test_dir, "Movie.mp4")
         _write(mp4_path, "video")
@@ -343,6 +361,29 @@ class MkvMetadataTests(TempDirTestCase):
     @patch('subprocess.run', side_effect=FileNotFoundError("mkvmerge"))
     def test_get_mkv_metadata_warns_and_returns_none_when_mkvmerge_fails(self, mock_run):
         with patch('builtins.print') as mock_print:
+            self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
+
+        self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch(
+        "kodi_nfo_fiddler.subprocess.run",
+        side_effect=subprocess.CalledProcessError(2, ["mkvmerge", "-J"], stderr="Error: boom"),
+    )
+    def test_get_mkv_metadata_warns_and_returns_none_on_nonzero_exit(self, mock_run):
+        with patch("builtins.print") as mock_print:
+            self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
+
+        mock_run.assert_called_once_with(
+            ["mkvmerge", "-J", "dummy_path.mkv"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch("kodi_nfo_fiddler.subprocess.run", return_value=MagicMock(stdout="not json", returncode=0))
+    def test_get_mkv_metadata_warns_and_returns_none_on_invalid_json(self, mock_run):
+        with patch("builtins.print") as mock_print:
             self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
 
         self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
