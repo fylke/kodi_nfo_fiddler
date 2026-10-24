@@ -747,6 +747,37 @@ class TestMovieOrganizer(unittest.TestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_uses_largest_video_in_subdirectory(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        movie_dir = os.path.join(self.test_dir, "Inception")
+        os.makedirs(movie_dir)
+        for name, size in (("a.2010.BluRay.mp4", 60), ("z.2010.BluRay.mkv", 150)):
+            with open(os.path.join(movie_dir, name), "wb") as video_file:
+                video_file.write(b"x" * size)
+
+        new_dir = process_directory(movie_dir)
+
+        organized = os.path.join(new_dir, f"{os.path.basename(new_dir)}.mkv")
+        self.assertEqual(os.path.getsize(organized), 150)
+        self.assertTrue(os.path.exists(os.path.join(new_dir, "a.2010.BluRay.mp4")))
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_skips_folder_with_similar_sized_videos(self, mock_mkv, mock_tmdb):
+        movie_dir = os.path.join(self.test_dir, "Inception")
+        os.makedirs(movie_dir)
+        for name, size in (("a.2010.BluRay.mkv", 100), ("b.2010.BluRay.mkv", 150)):
+            with open(os.path.join(movie_dir, name), "wb") as video_file:
+                video_file.write(b"x" * size)
+
+        self.assertEqual(process_directory(movie_dir), movie_dir)
+
+        self.assertEqual(sorted(os.listdir(movie_dir)), ["a.2010.BluRay.mkv", "b.2010.BluRay.mkv"])
+        mock_tmdb.assert_not_called()
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_skips_rename_when_a_tag_is_unknown(self, mock_mkv, mock_tmdb):
         mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
         movie_dir = os.path.join(self.test_dir, "Inception 2010")

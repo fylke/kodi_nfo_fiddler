@@ -479,6 +479,24 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
     if not video_files:
         return None
 
+    if is_root:
+        video_files.sort()
+    else:
+        # The largest video is assumed to be the movie; the rest are left untouched
+        video_files.sort(key=lambda name: os.path.getsize(os.path.join(directory_path, name)), reverse=True)
+        if len(video_files) > 1:
+            largest, runner_up = (os.path.getsize(os.path.join(directory_path, name)) for name in video_files[:2])
+            if largest < 2 * runner_up:
+                print_warning(
+                    f"'{os.path.basename(directory_path)}' has several videos of similar size; "
+                    "can't tell which is the movie. Skipping folder."
+                )
+                return directory_path
+            print_warning(
+                f"'{os.path.basename(directory_path)}' has {len(video_files)} videos; "
+                f"using the largest ('{video_files[0]}') and leaving the others."
+            )
+
     print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {len(video_files)} video file(s))")
 
     for original_filename in video_files:
