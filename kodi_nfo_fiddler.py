@@ -14,17 +14,13 @@ import json
 import subprocess
 import uuid
 import xml.etree.ElementTree as ET
-from xml.sax.saxutils import escape
 import requests
 from dotenv import load_dotenv
 
 # Load environment variables from .env
 load_dotenv()
 
-# --- CONFIGURATION ---
 TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
-# ---------------------
-
 TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
@@ -55,7 +51,8 @@ AUDIO_CHANNEL_LAYOUTS = {8: "7.1", 6: "5.1", 2: "2.0", 1: "1.0"}
 
 
 def print_warning(message):
-    """Print a warning in yellow when stdout is an interactive terminal."""
+    """Print a "[!]"-prefixed warning, in yellow when stdout is an interactive terminal."""
+    message = f"[!] {message}"
     if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
         message = f"\033[33m{message}\033[0m"
     print(message)
@@ -124,7 +121,7 @@ def remux_mp4_to_mkv(mp4_path):
     except (OSError, subprocess.CalledProcessError) as error:
         error_details = getattr(error, "stderr", None) or error
 
-    print_warning(f"[!] Failed to convert '{os.path.basename(mp4_path)}' to MKV: {error_details}")
+    print_warning(f"Failed to convert '{os.path.basename(mp4_path)}' to MKV: {error_details}")
     if os.path.exists(output_path):
         os.remove(output_path)
     return None
@@ -183,7 +180,7 @@ def get_mkv_metadata(filepath):
         )
         tracks = json.loads(result.stdout).get("tracks", [])
     except (OSError, subprocess.CalledProcessError, ValueError) as e:
-        print_warning(f"[!] Could not read MKV metadata for '{os.path.basename(filepath)}': {e}")
+        print_warning(f"Could not read MKV metadata for '{os.path.basename(filepath)}': {e}")
         return None
 
     resolution = "Unknown Resolution"
@@ -244,7 +241,7 @@ def search_tmdb(title, year):
 
         # Tier 2: Broad Fallback Search (If strict year filter returned 0 hits)
         if has_year:
-            print_warning(f"[!] Strict year match failed for '{title}' ({year}). Trying broad search...")
+            print_warning(f"Strict year match failed for '{title}' ({year}). Trying broad search...")
             broad_params = {k: v for k, v in params.items() if k not in ("year", "primary_release_year")}
             results = tmdb_get("/search/movie", broad_params).get("results", [])
 
@@ -334,7 +331,7 @@ def get_video_files(directory):
     try:
         return [f for f in os.listdir(directory) if f.lower().endswith(MEDIA_EXTENSIONS) and os.path.isfile(os.path.join(directory, f))]
     except OSError as e:
-        print_warning(f"[!] Could not list '{directory}': {e}")
+        print_warning(f"Could not list '{directory}': {e}")
         return []
 
 def remove_smaller_video_files(directory):
@@ -366,7 +363,7 @@ def remove_unwanted_files(directory):
             if filename.lower().endswith(REMOVE_EXTENSIONS) and os.path.isfile(file_path):
                 os.remove(file_path)
     except OSError as e:
-        print_warning(f"[!] Could not remove unwanted files in '{directory}': {e}")
+        print_warning(f"Could not remove unwanted files in '{directory}': {e}")
 
 def remove_featurettes_folder(directory):
     """Removes a Featurettes folder from the given movie directory."""
@@ -375,7 +372,7 @@ def remove_featurettes_folder(directory):
         if os.path.isdir(featurettes_path):
             shutil.rmtree(featurettes_path)
     except OSError as e:
-        print_warning(f"[!] Could not remove '{featurettes_path}': {e}")
+        print_warning(f"Could not remove '{featurettes_path}': {e}")
 
 def remove_sample_entries(directory):
     """Removes files or folders starting with sample from the given movie directory."""
@@ -390,7 +387,7 @@ def remove_sample_entries(directory):
             elif os.path.isfile(sample_path):
                 os.remove(sample_path)
     except OSError as e:
-        print_warning(f"[!] Could not remove sample files in '{directory}': {e}")
+        print_warning(f"Could not remove sample files in '{directory}': {e}")
 
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
@@ -434,7 +431,7 @@ def prepare_mkv(directory_path, filename, remux_mp4):
             return None
         return file_path, f"{os.path.splitext(filename)[0]}.mkv"
     if not filename.lower().endswith('.mkv'):
-        print_warning(f"[!] Skipping non-MKV media file: {filename}")
+        print_warning(f"Skipping non-MKV media file: {filename}")
         return None
     return file_path, filename
 
@@ -445,7 +442,7 @@ def resolve_naming(metadata):
     """
     search_result = search_tmdb(metadata['title'], metadata['year'])
     if search_result is None:
-        print_warning(f"[!] No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
+        print_warning(f"No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
         return None, metadata['title'], f"no_hit_{metadata['title']}", metadata['year']
 
     # Use the official TMDB title and release year for naming
@@ -499,7 +496,7 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         # Prefer the original directory metadata when retrying a previous no-hit.
         metadata = parse_filename(stored_directory or filename, file_path)
         if not metadata.get("english_subtitles", False):
-            print_warning(f"[!] WARNING: No English subtitles found in '{filename}'.")
+            print_warning(f"No English subtitles found in '{filename}'.")
 
         tmdb_id, nfo_title, folder_title, year = resolve_naming(metadata)
         new_name = build_new_name(metadata, folder_title, year)
@@ -558,28 +555,35 @@ def lookup_tmdb_by_id(tmdb_id):
     """Returns a movie details dict (tmdb_id, title, year, imdb_id) for a TMDB movie id."""
     return _movie_details(tmdb_get(f"/movie/{tmdb_id}"))
 
+def write_nfo_xml(path, root_tag, fields):
+    """Writes an NFO whose root has one child per (tag, text, attributes) field."""
+    root = ET.Element(root_tag)
+    for tag, text, attributes in fields:
+        ET.SubElement(root, tag, attributes).text = str(text)
+    ET.indent(root, space="    ")
+    with open(path, "w", encoding="utf-8") as nfo:
+        nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
+        nfo.write(ET.tostring(root, encoding="unicode", short_empty_elements=False) + "\n")
+
 def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filename=None, original_directory=None):
     """
     Writes a Kodi movie NFO. Without a tmdb_id (a no-hit) the unique ids are omitted
     and kodi_nfo_url is left empty. The original_* fields let a no-hit be retried later.
     """
-    with open(path, "w", encoding="utf-8") as nfo:
-        nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
-        nfo.write("<movie>\n")
-        if original_filename:
-            nfo.write(f"    <original_filename>{escape(original_filename)}</original_filename>\n")
-        if original_directory:
-            nfo.write(f"    <original_directory>{escape(original_directory)}</original_directory>\n")
-        nfo.write(f"    <title>{escape(title)}</title>\n")
-        if year:
-            nfo.write(f"    <year>{escape(year)}</year>\n")
-        if tmdb_id:
-            nfo.write(f"    <uniqueid type=\"tmdb\" default=\"true\">{tmdb_id}</uniqueid>\n")
-        if imdb_id:
-            nfo.write(f"    <uniqueid type=\"imdb\">{escape(imdb_id)}</uniqueid>\n")
-        kodi_nfo_url = f"{TMDB_MOVIE_BASE_URL}{tmdb_id}" if tmdb_id else ""
-        nfo.write(f"    <kodi_nfo_url>{kodi_nfo_url}</kodi_nfo_url>\n")
-        nfo.write("</movie>\n")
+    fields = []
+    if original_filename:
+        fields.append(("original_filename", original_filename, {}))
+    if original_directory:
+        fields.append(("original_directory", original_directory, {}))
+    fields.append(("title", title, {}))
+    if year:
+        fields.append(("year", year, {}))
+    if tmdb_id:
+        fields.append(("uniqueid", tmdb_id, {"type": "tmdb", "default": "true"}))
+    if imdb_id:
+        fields.append(("uniqueid", imdb_id, {"type": "imdb"}))
+    fields.append(("kodi_nfo_url", f"{TMDB_MOVIE_BASE_URL}{tmdb_id}" if tmdb_id else "", {}))
+    write_nfo_xml(path, "movie", fields)
 
 def lookup_tmdb_tv_by_external_id(external_id, source):
     """Returns the TMDB tv id for an IMDB or TVDB id (source: imdb_id or tvdb_id), or None."""
@@ -600,25 +604,16 @@ def lookup_tmdb_tv(tmdb_id):
 
 def write_kodi_tvshow_nfo(path, show):
     """Writes a Kodi tvshow NFO. TVDB is the default id (Kodi's default TV scraper) when known."""
-    unique_ids = []
-    if show.get("tvdb_id"):
-        unique_ids.append(("tvdb", show["tvdb_id"]))
-    if show.get("tmdb_id"):
-        unique_ids.append(("tmdb", show["tmdb_id"]))
-    if show.get("imdb_id"):
-        unique_ids.append(("imdb", show["imdb_id"]))
-
-    with open(path, "w", encoding="utf-8") as nfo:
-        nfo.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n")
-        nfo.write("<tvshow>\n")
-        if show.get("title"):
-            nfo.write(f"    <title>{escape(show['title'])}</title>\n")
-        if show.get("year"):
-            nfo.write(f"    <year>{escape(show['year'])}</year>\n")
-        for index, (id_type, value) in enumerate(unique_ids):
-            default = " default=\"true\"" if index == 0 else ""
-            nfo.write(f"    <uniqueid type=\"{id_type}\"{default}>{escape(str(value))}</uniqueid>\n")
-        nfo.write("</tvshow>\n")
+    fields = []
+    if show.get("title"):
+        fields.append(("title", show["title"], {}))
+    if show.get("year"):
+        fields.append(("year", show["year"], {}))
+    unique_ids = [(id_type, show[key]) for id_type, key in (("tvdb", "tvdb_id"), ("tmdb", "tmdb_id"), ("imdb", "imdb_id")) if show.get(key)]
+    for index, (id_type, value) in enumerate(unique_ids):
+        attributes = {"type": id_type, **({"default": "true"} if index == 0 else {})}
+        fields.append(("uniqueid", value, attributes))
+    write_nfo_xml(path, "tvshow", fields)
 
 def upgrade_tvshow_nfo(path, text):
     """Upgrades a plain-text tvshow.nfo link. Returns "upgraded", "skipped" or "failed"."""
@@ -626,33 +621,35 @@ def upgrade_tvshow_nfo(path, text):
     tmdb_match = TMDB_TV_URL_PATTERN.search(text)
     tvdb_match = TVDB_ID_PATTERN.search(text)
     if not (imdb_match or tmdb_match or tvdb_match):
-        print_warning(f"[!] No IMDB, TMDB or TVDB series id found in '{path}'. Leaving it unchanged.")
+        print_warning(f"No IMDB, TMDB or TVDB series id found in '{path}'. Leaving it unchanged.")
         return "skipped"
 
-    try:
-        if tmdb_match:
-            tmdb_id = tmdb_match.group(1)
-        elif tvdb_match:
-            tmdb_id = lookup_tmdb_tv_by_external_id(tvdb_match.group(1), "tvdb_id")
-        else:
-            tmdb_id = lookup_tmdb_tv_by_external_id(imdb_match.group(1), "imdb_id")
+    linked_ids = {
+        "tvdb_id": tvdb_match.group(1) if tvdb_match else None,
+        "imdb_id": imdb_match.group(1) if imdb_match else None,
+    }
 
-        if tmdb_id is None:
-            if tvdb_match:
-                # TVDB id is already what Kodi wants; write it without TMDB enrichment.
-                show = {"tvdb_id": tvdb_match.group(1), "imdb_id": imdb_match.group(1) if imdb_match else None}
-            else:
-                print_warning(f"[!] No TMDB TV show found for '{path}'. Leaving it unchanged.")
+    try:
+        tmdb_id = tmdb_match.group(1) if tmdb_match else None
+        if tmdb_id is None and linked_ids["tvdb_id"]:
+            tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["tvdb_id"], "tvdb_id")
+        if tmdb_id is None and linked_ids["imdb_id"]:
+            tmdb_id = lookup_tmdb_tv_by_external_id(linked_ids["imdb_id"], "imdb_id")
+
+        show = lookup_tmdb_tv(tmdb_id) if tmdb_id else None
+        if show is None:
+            if not linked_ids["tvdb_id"]:
+                print_warning(f"No TMDB TV show found for '{path}'. Leaving it unchanged.")
                 return "failed"
-        else:
-            show = lookup_tmdb_tv(tmdb_id)
-            if tvdb_match and not show["tvdb_id"]:
-                show["tvdb_id"] = tvdb_match.group(1)
-            if imdb_match and not show["imdb_id"]:
-                show["imdb_id"] = imdb_match.group(1)
+            # TVDB id is already what Kodi wants; write it without TMDB enrichment.
+            show = {}
+
+        # Ids from the original link fill any gaps TMDB left
+        for key, value in linked_ids.items():
+            show[key] = show.get(key) or value
         write_kodi_tvshow_nfo(path, show)
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
-        print_warning(f"[!] Failed to upgrade '{path}': {e}")
+        print_warning(f"Failed to upgrade '{path}': {e}")
         return "failed"
 
     print(f"[+] Upgraded TV show NFO: {path} -> TVDB {show.get('tvdb_id') or 'n/a'}, TMDB {show.get('tmdb_id') or 'n/a'}")
@@ -667,7 +664,7 @@ def upgrade_nfo_file(path):
         with open(path, encoding="utf-8-sig", errors="replace") as nfo:
             text = nfo.read()
     except OSError as e:
-        print_warning(f"[!] Could not read '{path}': {e}")
+        print_warning(f"Could not read '{path}': {e}")
         return "failed"
 
     # Anything XML-like is left alone, including malformed or non-movie NFOs.
@@ -680,7 +677,7 @@ def upgrade_nfo_file(path):
     imdb_match = IMDB_ID_PATTERN.search(text)
     tmdb_match = TMDB_MOVIE_URL_PATTERN.search(text)
     if not imdb_match and not tmdb_match:
-        print_warning(f"[!] No IMDB or TMDB link found in '{path}'. Leaving it unchanged.")
+        print_warning(f"No IMDB or TMDB link found in '{path}'. Leaving it unchanged.")
         return "skipped"
 
     try:
@@ -690,11 +687,11 @@ def upgrade_nfo_file(path):
         else:
             movie = lookup_tmdb_by_imdb_id(imdb_match.group(1))
             if movie is None:
-                print_warning(f"[!] No TMDB movie found for {imdb_match.group(1)} in '{path}'. Leaving it unchanged.")
+                print_warning(f"No TMDB movie found for {imdb_match.group(1)} in '{path}'. Leaving it unchanged.")
                 return "failed"
         write_kodi_nfo(path, movie["title"], movie["year"], tmdb_id=movie["tmdb_id"], imdb_id=movie["imdb_id"])
     except (requests.RequestException, KeyError, ValueError, OSError) as e:
-        print_warning(f"[!] Failed to upgrade '{path}': {e}")
+        print_warning(f"Failed to upgrade '{path}': {e}")
         return "failed"
 
     print(f"[+] Upgraded NFO: {path} -> TMDB {movie['tmdb_id']} ({movie['title']})")

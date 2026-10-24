@@ -179,7 +179,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_print_warning_colors_interactive_output(self, mock_stdout):
         mock_stdout.isatty.return_value = True
 
-        print_warning("[!] A warning")
+        print_warning("A warning")
 
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertIn("\033[33m[!] A warning\033[0m", output)
@@ -189,7 +189,7 @@ class TestMovieOrganizer(unittest.TestCase):
     def test_print_warning_respects_no_color(self, mock_stdout):
         mock_stdout.isatty.return_value = True
 
-        print_warning("[!] A warning")
+        print_warning("A warning")
 
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertNotIn("\033[", output)
