@@ -17,15 +17,15 @@ import xml.etree.ElementTree as ET
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables from .env
-load_dotenv()
+# Set from the environment (or .env) when the program starts
+TMDB_READ_TOKEN = None
 
-TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
-TMDB_MOVIE_BASE_URL = "https://www.themoviedb.org/movie/"
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_HOST = "themoviedb.org"
+TMDB_MOVIE_BASE_URL = f"https://www.{TMDB_HOST}/movie/"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
-TMDB_MOVIE_URL_PATTERN = re.compile(r"themoviedb\.org/movie/(\d+)", re.IGNORECASE)
-TMDB_TV_URL_PATTERN = re.compile(r"themoviedb\.org/tv/(\d+)", re.IGNORECASE)
+TMDB_MOVIE_URL_PATTERN = re.compile(re.escape(f"{TMDB_HOST}/movie/") + r"(\d+)", re.IGNORECASE)
+TMDB_TV_URL_PATTERN = re.compile(re.escape(f"{TMDB_HOST}/tv/") + r"(\d+)", re.IGNORECASE)
 TVDB_ID_PATTERN = re.compile(r"thetvdb\.com/\S*?(?:[?&](?:amp;)?(?:series)?id=|dereferrer/series/)(\d+)", re.IGNORECASE)
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
@@ -81,7 +81,6 @@ def print_warning(message):
     print(message)
 
 
-
 # ---------------------------------------------------------------------------
 # Subtitles and MP4 remuxing
 # ---------------------------------------------------------------------------
@@ -90,7 +89,6 @@ def is_language(language_tag, language):
     """True if a language tag (e.g. "eng", "en-US", "english") is one of the aliases for the language key."""
     primary_subtag = language_tag.casefold().split("-")[0]
     return primary_subtag in SUBTITLE_LANGUAGES[language]
-
 
 def find_sidecar_subtitles(video_path):
     """Find language-tagged subtitle files whose names match the video basename."""
@@ -117,7 +115,6 @@ def find_sidecar_subtitles(video_path):
     for language in subtitles:
         subtitles[language].sort(key=str.casefold)
     return subtitles
-
 
 def remux_mp4_to_mkv(mp4_path):
     """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
@@ -152,7 +149,6 @@ def remux_mp4_to_mkv(mp4_path):
     if os.path.exists(output_path):
         os.remove(output_path)
     return None
-
 
 
 # ---------------------------------------------------------------------------
@@ -832,6 +828,9 @@ def upgrade_nfo_files(directory):
 # ---------------------------------------------------------------------------
 
 def main():
+    global TMDB_READ_TOKEN
+    load_dotenv()
+    TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
     if not TMDB_READ_TOKEN:
         print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
         sys.exit(1)
@@ -862,7 +861,7 @@ def main():
         upgrade_nfo_files(target_dir)
         return
 
-    # 1. Snapshot the pre-existing subdirectories BEFORE processing loose files
+    # Snapshot the pre-existing subdirectories BEFORE processing loose files
     try:
         existing_subdirs = [
             os.path.join(target_dir, d)
@@ -873,10 +872,10 @@ def main():
         print_warning(f"Could not scan initial subdirectories: {e}")
         existing_subdirs = []
 
-    # 2. Process loose video files sitting directly in the root directory (Creates subdirs)
+    # Process loose video files sitting directly in the root directory (creates subdirs)
     process_directory(target_dir, is_root=True, remux_mp4=args.remux_mp4)
 
-    # 3. Process nested files in existing subdirectories (Renames the subdirs)
+    # Process nested files in existing subdirectories (renames the subdirs)
     for subdir in existing_subdirs:
         process_directory(subdir, is_root=False, remux_mp4=args.remux_mp4)
 

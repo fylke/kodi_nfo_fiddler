@@ -30,7 +30,7 @@ from kodi_nfo_fiddler import (
 def _movie(tmdb_id, title, year):
     return {"tmdb_id": tmdb_id, "title": title, "year": year, "imdb_id": None}
 
-class TestMovieOrganizer(unittest.TestCase):
+class TempDirTestCase(unittest.TestCase):
 
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
@@ -50,6 +50,9 @@ class TestMovieOrganizer(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as nfo:
             nfo.write(contents)
         return path
+
+
+class NfoUpgradeTests(TempDirTestCase):
 
     @patch("kodi_nfo_fiddler.requests.get")
     def test_upgrade_nfo_file_converts_imdb_link_to_tmdb_kodi_nfo(self, mock_get):
@@ -180,6 +183,9 @@ class TestMovieOrganizer(unittest.TestCase):
         with open(path, encoding="utf-8") as nfo:
             self.assertEqual(nfo.read(), original)
 
+
+class ConsoleOutputTests(TempDirTestCase):
+
     @patch.dict(os.environ, {}, clear=True)
     @patch('sys.stdout')
     def test_print_warning_colors_interactive_output(self, mock_stdout):
@@ -200,38 +206,8 @@ class TestMovieOrganizer(unittest.TestCase):
         output = "".join(call.args[0] for call in mock_stdout.write.call_args_list)
         self.assertNotIn("\033[", output)
 
-    def test_classify_resolution_buckets(self):
-        self.assertEqual(classify_resolution(3840, 1600), "2160p")
-        self.assertEqual(classify_resolution(1920, 800), "1080p")
-        self.assertEqual(classify_resolution(1280, 536), "720p")
-        self.assertEqual(classify_resolution(720, 400), "SD")
-        self.assertEqual(classify_resolution(640, 360), "360p")
 
-    def test_describe_audio_names_codec_and_channels(self):
-        cases = (
-            ("A_DTS", 6, ("DTS", "5.1", False)),
-            ("A_EAC3", 8, ("E-AC3", "7.1", False)),
-            ("A_AC3", 2, ("AC3", "2.0", False)),
-            ("A_TRUEHD", 10, ("TrueHD", "10.0", False)),
-            ("A_VORBIS", 2, ("Vorbis", "2.0", False)),
-            ("MP3", 2, ("MP3", "2.0", False)),
-            ("MP2", 2, ("MP2", "2.0", False)),
-            ("PCM", 2, ("PCM", "2.0", False)),
-            ("E-AC-3 Atmos", 6, ("E-AC3", "5.1", True)),
-            ("TrueHD Atmos", 8, ("TrueHD", "7.1", True)),
-            ("A_WAVPACK4", None, ("WAVPACK4", None, False)),
-        )
-        for codec, channels, expected in cases:
-            with self.subTest(codec=codec):
-                track = {"codec": codec, "properties": {"audio_channels": channels}}
-                self.assertEqual(describe_audio(track), expected)
-
-    @patch('subprocess.run', side_effect=FileNotFoundError("mkvmerge"))
-    def test_get_mkv_metadata_warns_and_returns_none_when_mkvmerge_fails(self, mock_run):
-        with patch('builtins.print') as mock_print:
-            self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
-
-        self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
+class SubtitleAndRemuxTests(TempDirTestCase):
 
     def test_is_language_matches_tags_and_regional_variants(self):
         for tag in ("en", "eng", "English", "en-US", "EN-gb"):
@@ -240,38 +216,6 @@ class TestMovieOrganizer(unittest.TestCase):
             self.assertTrue(is_language(tag, "sv"), tag)
         for tag in ("", "fra", "und", "enm"):
             self.assertFalse(is_language(tag, "en"), tag)
-
-    def test_detect_source_normalizes_and_returns_none_when_missing(self):
-        self.assertEqual(detect_source("Movie 2024 1080p WEB-DL"), "WEBRip")
-        self.assertEqual(detect_source("movie bdrip x264"), "BluRay")
-        self.assertIsNone(detect_source("Movie 2024 1080p"))
-
-    def test_detect_source_handles_spelling_variants(self):
-        expected = {
-            "Movie 2024 Blu Ray": "BluRay",
-            "Movie 2024 Blu-Ray": "BluRay",
-            "Movie 2024 1080p BDRemux": "BluRay",
-            "Movie 2024 2160p UHD BluRay REMUX": "BluRay",
-            "Movie 2024 WEBDL": "WEBRip",
-            "Movie 2024 HDRip": "WEBRip",
-            "Movie 2024 DVDR": "DVD",
-            "Show 2024 PDTV": "PDTV",
-            "Movie.2024.1080p.Blu.Ray": "BluRay",
-            "Movie_2024_WEB_DL": "WEBRip",
-        }
-        for text, source in expected.items():
-            with self.subTest(text=text):
-                self.assertEqual(detect_source(text), source)
-
-    def test_parse_filename_cuts_title_at_any_source_or_resolution_tag_without_year(self):
-        for name in ("Some Movie 720p.mkv", "Some Movie HDTV x264.mkv", "Some Movie.WEB-DL.mkv", "Some.Movie.Blu-Ray.mkv"):
-            with self.subTest(name=name):
-                self.assertEqual(parse_filename(name, name)["title"], "Some Movie")
-
-    def test_parse_filename_uses_none_for_unknown_year_and_source(self):
-        metadata = parse_filename("Some Movie.mkv", "Some Movie.mkv")
-        self.assertIsNone(metadata["year"])
-        self.assertIsNone(metadata["source"])
 
     def test_find_sidecar_subtitles_matches_video_basename_and_languages(self):
         video_path = os.path.join(self.test_dir, "Movie.2024.mp4")
@@ -361,6 +305,42 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertFalse(os.path.exists(mp4_path))
         self.assertTrue(any("warnings" in call.args[0] for call in mock_print.call_args_list))
 
+
+class MkvMetadataTests(TempDirTestCase):
+
+    def test_classify_resolution_buckets(self):
+        self.assertEqual(classify_resolution(3840, 1600), "2160p")
+        self.assertEqual(classify_resolution(1920, 800), "1080p")
+        self.assertEqual(classify_resolution(1280, 536), "720p")
+        self.assertEqual(classify_resolution(720, 400), "SD")
+        self.assertEqual(classify_resolution(640, 360), "360p")
+
+    def test_describe_audio_names_codec_and_channels(self):
+        cases = (
+            ("A_DTS", 6, ("DTS", "5.1", False)),
+            ("A_EAC3", 8, ("E-AC3", "7.1", False)),
+            ("A_AC3", 2, ("AC3", "2.0", False)),
+            ("A_TRUEHD", 10, ("TrueHD", "10.0", False)),
+            ("A_VORBIS", 2, ("Vorbis", "2.0", False)),
+            ("MP3", 2, ("MP3", "2.0", False)),
+            ("MP2", 2, ("MP2", "2.0", False)),
+            ("PCM", 2, ("PCM", "2.0", False)),
+            ("E-AC-3 Atmos", 6, ("E-AC3", "5.1", True)),
+            ("TrueHD Atmos", 8, ("TrueHD", "7.1", True)),
+            ("A_WAVPACK4", None, ("WAVPACK4", None, False)),
+        )
+        for codec, channels, expected in cases:
+            with self.subTest(codec=codec):
+                track = {"codec": codec, "properties": {"audio_channels": channels}}
+                self.assertEqual(describe_audio(track), expected)
+
+    @patch('subprocess.run', side_effect=FileNotFoundError("mkvmerge"))
+    def test_get_mkv_metadata_warns_and_returns_none_when_mkvmerge_fails(self, mock_run):
+        with patch('builtins.print') as mock_print:
+            self.assertIsNone(get_mkv_metadata("dummy_path.mkv"))
+
+        self.assertTrue(any("Could not read MKV metadata" in call.args[0] for call in mock_print.call_args_list))
+
     @patch('subprocess.run')
     def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
         """Verify that a widescreen 1920x800 file correctly maps to 1080p."""
@@ -426,6 +406,86 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertFalse(metadata["english_subtitles"])
 
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_widescreen_1080p_at_1920x802(self, mock_run):
+        """Verify that a widescreen 1920x802 file correctly maps to 1080p."""
+        mock_stdout = json.dumps({
+            "tracks": [
+                {
+                    "type": "video",
+                    "properties": {
+                        "display_dimensions": "1920x802"
+                    }
+                },
+                {
+                    "type": "audio",
+                    "codec": "A_DTS",
+                    "properties": {
+                        "audio_channels": 6
+                    }
+                }
+            ]
+        })
+
+        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["resolution"], "1080p")
+
+    @patch('subprocess.run')
+    def test_get_mkv_metadata_cropped_1080p(self, mock_run):
+        """Verify that a slightly cropped 1916x1034 file maps to 1080p."""
+        mock_stdout = json.dumps({
+            "tracks": [{
+                "type": "video",
+                "properties": {
+                    "display_dimensions": "1916x1034"
+                }
+            }]
+        })
+
+        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
+        metadata = get_mkv_metadata("dummy_path.mkv")
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["resolution"], "1080p")
+
+
+class FilenameParsingTests(TempDirTestCase):
+
+    def test_detect_source_normalizes_and_returns_none_when_missing(self):
+        self.assertEqual(detect_source("Movie 2024 1080p WEB-DL"), "WEBRip")
+        self.assertEqual(detect_source("movie bdrip x264"), "BluRay")
+        self.assertIsNone(detect_source("Movie 2024 1080p"))
+
+    def test_detect_source_handles_spelling_variants(self):
+        expected = {
+            "Movie 2024 Blu Ray": "BluRay",
+            "Movie 2024 Blu-Ray": "BluRay",
+            "Movie 2024 1080p BDRemux": "BluRay",
+            "Movie 2024 2160p UHD BluRay REMUX": "BluRay",
+            "Movie 2024 WEBDL": "WEBRip",
+            "Movie 2024 HDRip": "WEBRip",
+            "Movie 2024 DVDR": "DVD",
+            "Show 2024 PDTV": "PDTV",
+            "Movie.2024.1080p.Blu.Ray": "BluRay",
+            "Movie_2024_WEB_DL": "WEBRip",
+        }
+        for text, source in expected.items():
+            with self.subTest(text=text):
+                self.assertEqual(detect_source(text), source)
+
+    def test_parse_filename_cuts_title_at_any_source_or_resolution_tag_without_year(self):
+        for name in ("Some Movie 720p.mkv", "Some Movie HDTV x264.mkv", "Some Movie.WEB-DL.mkv", "Some.Movie.Blu-Ray.mkv"):
+            with self.subTest(name=name):
+                self.assertEqual(parse_filename(name, name)["title"], "Some Movie")
+
+    def test_parse_filename_uses_none_for_unknown_year_and_source(self):
+        metadata = parse_filename("Some Movie.mkv", "Some Movie.mkv")
+        self.assertIsNone(metadata["year"])
+        self.assertIsNone(metadata["source"])
+
     def test_build_new_name_appends_atmos_after_channels(self):
         metadata = {
             "resolution": "2160p", "source": "BluRay",
@@ -489,6 +549,34 @@ class TestMovieOrganizer(unittest.TestCase):
         mock_mkv.assert_called_once_with("folder/no_hit_x.mkv")
         self.assertEqual(metadata["resolution"], "1080p")
         self.assertEqual(metadata["title"], "Mystery Movie")
+
+    def test_parse_filename_with_heavy_metadata(self):
+        filename = "Toy Story (1995) (1080p DS4K BluRay x265 10-bit HDR AAC 7.1).mkv"
+        metadata = parse_filename(filename, "dummy_path.mkv")
+
+        self.assertEqual(metadata["title"], "Toy Story")
+        self.assertEqual(metadata["year"], "1995")
+
+    def test_parse_filename_with_year_attached_to_title(self):
+        metadata = parse_filename(
+            "Eddie.Izzard.Sexie2003.x264.aac.mkv",
+            "dummy_path.mkv"
+        )
+
+        self.assertEqual(metadata["title"], "Eddie Izzard Sexie")
+        self.assertEqual(metadata["year"], "2003")
+
+    def test_parse_filename_removes_prepended_url(self):
+        metadata = parse_filename(
+            "WwW.SeeHD.WS__Free Solo 2018 1080p WEB-DL X264 AC3-SeeHD.mkv",
+            "dummy_path.mkv"
+        )
+
+        self.assertEqual(metadata["title"], "Free Solo")
+        self.assertEqual(metadata["year"], "2018")
+
+
+class ProcessDirectoryTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     def test_process_directory_removes_txt_and_jpg_files(self, mock_tmdb):
@@ -915,75 +1003,22 @@ class TestMovieOrganizer(unittest.TestCase):
 
         self.assertIn("BluRay", os.path.basename(new_folder_path))
 
-    @patch('subprocess.run')
-    def test_get_mkv_metadata_widescreen_1080p(self, mock_run):
-        """Verify that a widescreen 1920x802 file correctly maps to 1080p."""
-        mock_stdout = json.dumps({
-            "tracks": [
-                {
-                    "type": "video",
-                    "properties": {
-                        "display_dimensions": "1920x802"
-                    }
-                },
-                {
-                    "type": "audio",
-                    "codec": "A_DTS",
-                    "properties": {
-                        "audio_channels": 6
-                    }
-                }
-            ]
-        })
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_warns_and_continues_when_rename_fails(self, mock_mkv, mock_tmdb):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
+        with open(video_path, "w") as video_file:
+            video_file.write("x")
 
-        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
-        metadata = get_mkv_metadata("dummy_path.mkv")
+        with patch("kodi_nfo_fiddler.os.rename", side_effect=OSError("denied")):
+            process_directory(self.test_dir, is_root=True)
 
-        self.assertIsNotNone(metadata)
-        self.assertEqual(metadata["resolution"], "1080p")
+        self.assertTrue(os.path.exists(video_path))
 
-    @patch('subprocess.run')
-    def test_get_mkv_metadata_cropped_1080p(self, mock_run):
-        """Verify that a slightly cropped 1916x1034 file maps to 1080p."""
-        mock_stdout = json.dumps({
-            "tracks": [{
-                "type": "video",
-                "properties": {
-                    "display_dimensions": "1916x1034"
-                }
-            }]
-        })
 
-        mock_run.return_value = MagicMock(stdout=mock_stdout, returncode=0)
-        metadata = get_mkv_metadata("dummy_path.mkv")
-
-        self.assertIsNotNone(metadata)
-        self.assertEqual(metadata["resolution"], "1080p")
-
-    def test_parse_filename_with_heavy_metadata(self):
-        filename = "Toy Story (1995) (1080p DS4K BluRay x265 10-bit HDR AAC 7.1).mkv"
-        metadata = parse_filename(filename, "dummy_path.mkv")
-
-        self.assertEqual(metadata["title"], "Toy Story")
-        self.assertEqual(metadata["year"], "1995")
-
-    def test_parse_filename_with_year_attached_to_title(self):
-        metadata = parse_filename(
-            "Eddie.Izzard.Sexie2003.x264.aac.mkv",
-            "dummy_path.mkv"
-        )
-
-        self.assertEqual(metadata["title"], "Eddie Izzard Sexie")
-        self.assertEqual(metadata["year"], "2003")
-
-    def test_parse_filename_removes_prepended_url(self):
-        metadata = parse_filename(
-            "WwW.SeeHD.WS__Free Solo 2018 1080p WEB-DL X264 AC3-SeeHD.mkv",
-            "dummy_path.mkv"
-        )
-
-        self.assertEqual(metadata["title"], "Free Solo")
-        self.assertEqual(metadata["year"], "2018")
+class TmdbSearchTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.requests.get')
     def test_search_tmdb_fallback_removes_all_year_filters(self, mock_get):
@@ -1026,19 +1061,6 @@ class TestMovieOrganizer(unittest.TestCase):
             self.assertIsNone(search_tmdb("Inception", "2010"))
         self.assertTrue(any("TMDB search failed" in call.args[0] for call in mock_print.call_args_list))
 
-    @patch('kodi_nfo_fiddler.search_tmdb')
-    @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_warns_and_continues_when_rename_fails(self, mock_mkv, mock_tmdb):
-        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
-        video_path = os.path.join(self.test_dir, "inception.2010.BluRay.mkv")
-        with open(video_path, "w") as video_file:
-            video_file.write("x")
-
-        with patch("kodi_nfo_fiddler.os.rename", side_effect=OSError("denied")):
-            process_directory(self.test_dir, is_root=True)
-
-        self.assertTrue(os.path.exists(video_path))
 
 if __name__ == '__main__':
     unittest.main()
