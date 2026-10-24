@@ -927,26 +927,48 @@ class ProcessDirectoryTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_nfo_year_matches_folder_and_skips_unknown_year(self, mock_mkv, mock_tmdb):
+    def test_process_directory_nfo_and_folder_use_tmdb_year_not_filename_year(self, mock_mkv, mock_tmdb):
         mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
-
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
-        hit_dir = os.path.join(self.test_dir, "Inception 2009 BluRay")
-        os.makedirs(hit_dir)
-        with open(os.path.join(hit_dir, "a.2010.BluRay.mkv"), "w") as video_file:
+        movie_dir = os.path.join(self.test_dir, "Inception 2009 BluRay")
+        os.makedirs(movie_dir)
+        with open(os.path.join(movie_dir, "inception.2009.BluRay.mkv"), "w") as video_file:
             video_file.write("x")
-        hit_path = process_directory(hit_dir)
-        hit_nfo = [f for f in os.listdir(hit_path) if f.endswith(".nfo")][0]
-        self.assertEqual(ET.parse(os.path.join(hit_path, hit_nfo)).getroot().findtext("year"), "2010")
 
+        new_dir = process_directory(movie_dir)
+
+        self.assertEqual(os.path.basename(new_dir), "Inception_(2010)_(1080p_BluRay_DTS_5.1)")
+        nfo_files = [name for name in os.listdir(new_dir) if name.endswith(".nfo")]
+        self.assertEqual(len(nfo_files), 1)
+        self.assertEqual(ET.parse(os.path.join(new_dir, nfo_files[0])).getroot().findtext("year"), "2010")
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_skips_no_hit_without_year(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
         mock_tmdb.return_value = None
-        miss_dir = os.path.join(self.test_dir, "Obscure Film")
-        os.makedirs(miss_dir)
-        with open(os.path.join(miss_dir, "b.BluRay.mkv"), "w") as video_file:
+        movie_dir = os.path.join(self.test_dir, "Obscure Film")
+        os.makedirs(movie_dir)
+        with open(os.path.join(movie_dir, "obscure.BluRay.mkv"), "w") as video_file:
             video_file.write("y")
-        miss_path = process_directory(miss_dir)
-        self.assertEqual(miss_path, miss_dir)
-        self.assertEqual(os.listdir(miss_dir), ["b.BluRay.mkv"])
+
+        self.assertEqual(process_directory(movie_dir), movie_dir)
+
+        self.assertEqual(os.listdir(movie_dir), ["obscure.BluRay.mkv"])
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_skips_hit_when_tmdb_has_no_release_year(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = {"resolution": "1080p", "audio_codec": "DTS", "audio_channels": "5.1"}
+        mock_tmdb.return_value = _movie("27205", "Inception", "")
+        movie_dir = os.path.join(self.test_dir, "Inception 2010")
+        os.makedirs(movie_dir)
+        with open(os.path.join(movie_dir, "inception.2010.BluRay.mkv"), "w") as video_file:
+            video_file.write("x")
+
+        self.assertEqual(process_directory(movie_dir), movie_dir)
+
+        self.assertEqual(os.listdir(movie_dir), ["inception.2010.BluRay.mkv"])
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
