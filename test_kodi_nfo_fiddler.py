@@ -218,7 +218,7 @@ class TestMovieOrganizer(unittest.TestCase):
             ("PCM", 2, ("PCM", "2.0", False)),
             ("E-AC-3 Atmos", 6, ("E-AC3", "5.1", True)),
             ("TrueHD Atmos", 8, ("TrueHD", "7.1", True)),
-            ("A_WAVPACK4", None, ("WAVPACK4", "Unknown Channels", False)),
+            ("A_WAVPACK4", None, ("WAVPACK4", None, False)),
         )
         for codec, channels, expected in cases:
             with self.subTest(codec=codec):
@@ -255,10 +255,22 @@ class TestMovieOrganizer(unittest.TestCase):
             "Movie 2024 HDRip": "WEBRip",
             "Movie 2024 DVDR": "DVD",
             "Show 2024 PDTV": "PDTV",
+            "Movie.2024.1080p.Blu.Ray": "BluRay",
+            "Movie_2024_WEB_DL": "WEBRip",
         }
         for text, source in expected.items():
             with self.subTest(text=text):
                 self.assertEqual(detect_source(text), source)
+
+    def test_parse_filename_cuts_title_at_any_source_or_resolution_tag_without_year(self):
+        for name in ("Some Movie 720p.mkv", "Some Movie HDTV x264.mkv", "Some Movie.WEB-DL.mkv", "Some.Movie.Blu-Ray.mkv"):
+            with self.subTest(name=name):
+                self.assertEqual(parse_filename(name, name)["title"], "Some Movie")
+
+    def test_parse_filename_uses_none_for_unknown_year_and_source(self):
+        metadata = parse_filename("Some Movie.mkv", "Some Movie.mkv")
+        self.assertIsNone(metadata["year"])
+        self.assertIsNone(metadata["source"])
 
     def test_find_sidecar_subtitles_matches_video_basename_and_languages(self):
         video_path = os.path.join(self.test_dir, "Movie.2024.mp4")
@@ -420,10 +432,10 @@ class TestMovieOrganizer(unittest.TestCase):
         self.assertEqual(metadata["title"], "Inception")
         self.assertEqual(metadata["year"], "2010")
         self.assertEqual(metadata["source"], "BluRay")
-        # Technical metadata must default to Unknown because it's not an MKV
-        self.assertEqual(metadata["resolution"], "Unknown Resolution")
-        self.assertEqual(metadata["audio_codec"], "Unknown Codec")
-        self.assertEqual(metadata["audio_channels"], "Unknown Channels")
+        # Technical metadata must be unknown (None) because it's not an MKV
+        self.assertIsNone(metadata["resolution"])
+        self.assertIsNone(metadata["audio_codec"])
+        self.assertIsNone(metadata["audio_channels"])
 
     def test_parse_filename_ignores_no_hit_prefix(self):
         metadata = parse_filename(
@@ -859,8 +871,8 @@ class TestMovieOrganizer(unittest.TestCase):
         mock_tmdb.return_value = _movie("278", "The Chronicles of Riddick", "2004")
         mock_mkv.return_value = {
             "resolution": "1080p",
-            "audio_codec": "Unknown Codec",
-            "audio_channels": "Unknown Channels"
+            "audio_codec": "AAC",
+            "audio_channels": "5.1"
         }
 
         movie_folder = os.path.join(
@@ -975,7 +987,7 @@ class TestMovieOrganizer(unittest.TestCase):
             "results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-15"}]
         })
 
-        result = search_tmdb("Inception", "Unknown Year")
+        result = search_tmdb("Inception", None)
 
         self.assertEqual(result, _movie(27205, "Inception", "2010"))
         params = mock_get.call_args.kwargs["params"]

@@ -29,18 +29,23 @@ TMDB_TV_URL_PATTERN = re.compile(r"themoviedb\.org/tv/(\d+)", re.IGNORECASE)
 TVDB_ID_PATTERN = re.compile(r"thetvdb\.com/\S*?(?:[?&](?:amp;)?(?:series)?id=|dereferrer/series/)(\d+)", re.IGNORECASE)
 MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
-SOURCE_KEYWORDS = [
-    "BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip",
-    "WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB",
-    "HDTV", "PDTV",
-    "DVDRip", "DVDR", "DVD",
+# Each normalized source tag with the spellings that map to it, checked in order.
+SOURCES = [
+    ("BluRay", ("BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip")),
+    ("WEBRip", ("WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB")),
+    ("HDTV", ("HDTV",)),
+    ("PDTV", ("PDTV",)),
+    ("DVD", ("DVDRip", "DVDR", "DVD")),
 ]
-SOURCE_NORMALIZATIONS = {
-    "Blu-Ray": "BluRay", "Blu Ray": "BluRay", "BDRemux": "BluRay",
-    "BRRip": "BluRay", "BDRip": "BluRay",
-    "WEB-DL": "WEBRip", "WEBDL": "WEBRip", "HDRip": "WEBRip", "WEB": "WEBRip",
-    "DVDRip": "DVD", "DVDR": "DVD",
-}
+RESOLUTION_TAGS = ("2160p", "1080p", "720p", "480p")
+# Where a title ends when the name has no year: the first resolution or source tag.
+TITLE_CUTOFF_PATTERN = re.compile(
+    r"\b(" + "|".join(
+        re.escape(tag)
+        for tag in RESOLUTION_TAGS + tuple(spelling for _, spellings in SOURCES for spelling in spellings)
+    ) + r")\b",
+    re.IGNORECASE,
+)
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
@@ -194,7 +199,7 @@ def describe_audio(track):
 
     channels = track.get("properties", {}).get("audio_channels")
     if not channels:
-        return codec, "Unknown Channels", has_atmos
+        return codec, None, has_atmos
     return codec, AUDIO_CHANNEL_LAYOUTS.get(channels, f"{channels}.0"), has_atmos
 
 def read_mkv_tracks(filepath):
@@ -218,9 +223,9 @@ def get_mkv_metadata(filepath):
     if tracks is None:
         return None
 
-    resolution = "Unknown Resolution"
-    audio_codec = "Unknown Codec"
-    audio_channels = "Unknown Channels"
+    resolution = None
+    audio_codec = None
+    audio_channels = None
     audio_atmos = False
     english_subtitles = False
 
@@ -231,11 +236,11 @@ def get_mkv_metadata(filepath):
         if track_type == "subtitles":
             language_tag = properties.get("language_ietf") or properties.get("language", "")
             english_subtitles = english_subtitles or is_language(language_tag, "en")
-        elif track_type == "video" and resolution == "Unknown Resolution":
+        elif track_type == "video" and resolution is None:
             dimensions = get_video_dimensions(properties)
             if dimensions:
                 resolution = classify_resolution(*dimensions)
-        elif track_type == "audio" and audio_codec == "Unknown Codec":
+        elif track_type == "audio" and audio_codec is None:
             audio_codec, audio_channels, audio_atmos = describe_audio(track)
 
     return {
@@ -253,9 +258,11 @@ def get_mkv_metadata(filepath):
 
 def detect_source(text):
     """Returns the normalized source (e.g. BluRay, WEBRip) named in the text, or None."""
-    for source in SOURCE_KEYWORDS:
-        if re.search(r'\b' + re.escape(source) + r'\b', text, re.IGNORECASE):
-            return SOURCE_NORMALIZATIONS.get(source, source)
+    # Same separator handling as filenames, so "Blu.Ray" matches in folder names too
+    text = text.replace('_', ' ').replace('.', ' ')
+    for source, spellings in SOURCES:
+        if any(re.search(r'\b' + re.escape(spelling) + r'\b', text, re.IGNORECASE) for spelling in spellings):
+            return source
     return None
 
 def parse_filename(filename, file_path):
@@ -264,11 +271,7 @@ def parse_filename(filename, file_path):
     Title and Year for TMDB API optimization, plus the source tag.
     Reads no files; the parent folder name of file_path is only used as a source hint.
     """
-    metadata = {
-        "title": "Unknown Title",
-        "year": "Unknown Year",
-        "source": "Unknown Source",
-    }
+    metadata = {"title": "", "year": None, "source": None}
 
     # Strip extension
     base_name, _ = os.path.splitext(filename)
@@ -289,7 +292,7 @@ def parse_filename(filename, file_path):
         title_part = clean_name[:year_match.start()]
     else:
         # Fallback if no year is found: try to cut off at common tag indicators
-        title_part = re.split(r'\b(1080p|720p|2160p|480p|BluRay|WEB|DVD)\b', clean_name, flags=re.IGNORECASE)[0]
+        title_part = TITLE_CUTOFF_PATTERN.split(clean_name)[0]
 
     # Clean up the extracted title string
     title_part = re.sub(r'[\(\)\[\]\-\+]', ' ', title_part) # Strip parentheses/brackets
@@ -299,7 +302,7 @@ def parse_filename(filename, file_path):
     # Deduce Source out of raw string before returning (fallback for non-MKVs).
     # Some release layouts keep the source tag only in the parent directory name.
     parent_name = os.path.basename(os.path.dirname(file_path))
-    metadata["source"] = detect_source(clean_name) or detect_source(parent_name) or "Unknown Source"
+    metadata["source"] = detect_source(clean_name) or detect_source(parent_name)
     return metadata
 
 def collect_metadata(name, file_path):
@@ -309,9 +312,9 @@ def collect_metadata(name, file_path):
     """
     metadata = parse_filename(name, file_path)
     metadata.update({
-        "resolution": "Unknown Resolution",
-        "audio_codec": "Unknown Codec",
-        "audio_channels": "Unknown Channels",
+        "resolution": None,
+        "audio_codec": None,
+        "audio_channels": None,
         "audio_atmos": False,
     })
     if file_path.lower().endswith('.mkv'):
@@ -450,7 +453,7 @@ def resolve_naming(metadata):
         return None, metadata['title'], f"no_hit_{metadata['title']}", metadata['year']
 
     # Use the official TMDB title and release year for naming
-    return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or "####"
+    return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or None
 
 def build_new_name(metadata, folder_title, year):
     """Builds the clean Title_(Year)_(resolution_source_codec_channels[_Atmos]) name."""
@@ -526,14 +529,14 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
         unknown_tags = [
             key.replace('_', ' ')
             for key in ('resolution', 'source', 'audio_codec', 'audio_channels')
-            if str(metadata[key]).startswith("Unknown")
+            if metadata[key] is None
         ]
         if unknown_tags:
             print_warning(f"Unknown {', '.join(unknown_tags)} for '{filename}'. Skipping rename.")
             continue
 
         tmdb_id, nfo_title, folder_title, year = resolve_naming(metadata)
-        if not re.fullmatch(r"\d{4}", year):
+        if year is None:
             print_warning(f"Unknown year for '{filename}'. Skipping rename.")
             continue
         new_name = build_new_name(metadata, folder_title, year)
@@ -604,7 +607,7 @@ def search_tmdb(title, year):
     Searches TMDB for a movie title and returns a movie details dict (see _movie_details),
     or None. If a strict year search fails, it falls back to a broad text search to match web behavior.
     """
-    has_year = bool(year) and year != "Unknown Year"
+    has_year = bool(year)
 
     # Tier 1: Strict API Search (Title + Exact Year Filter)
     params = {
