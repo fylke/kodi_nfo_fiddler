@@ -848,7 +848,7 @@ class ProcessDirectoryTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_stores_original_directory_for_no_hit_retry(self, mock_mkv, mock_tmdb):
+    def test_process_directory_uses_parsed_title_and_warns_on_no_tmdb_match(self, mock_mkv, mock_tmdb):
         mock_tmdb.return_value = None
         mock_mkv.return_value = _mkv_info()
 
@@ -856,17 +856,22 @@ class ProcessDirectoryTests(TempDirTestCase):
         os.makedirs(movie_folder)
         _write(os.path.join(movie_folder, "mystery.2024.mkv"), "fake video data")
 
-        no_hit_path = process_directory(movie_folder)
+        with patch("builtins.print") as mock_print:
+            organized_path = process_directory(movie_folder)
+
         nfo_path = next(
-            os.path.join(no_hit_path, filename)
-            for filename in os.listdir(no_hit_path)
+            os.path.join(organized_path, filename)
+            for filename in os.listdir(organized_path)
             if filename.endswith('.nfo')
         )
 
         with open(nfo_path, encoding="utf-8") as nfo_file:
             nfo_contents = nfo_file.read()
 
-        self.assertTrue(os.path.basename(no_hit_path).startswith("no_hit_"))
+        self.assertEqual(os.path.basename(organized_path), "mystery_(2024)_(1080p_BluRay_DTS_5.1)")
+        self.assertFalse(os.path.basename(organized_path).startswith("no_hit_"))
+        warning = "No TMDB match found for 'mystery'"
+        self.assertTrue(any(warning in str(call) for call in mock_print.call_args_list))
         self.assertIn(
             "<original_filename>mystery.2024.mkv</original_filename>",
             nfo_contents
@@ -879,7 +884,7 @@ class ProcessDirectoryTests(TempDirTestCase):
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
-    def test_process_directory_retries_no_hit_using_original_directory(self, mock_mkv, mock_tmdb):
+    def test_process_directory_retries_lookup_on_next_run_without_no_hit_prefix(self, mock_mkv, mock_tmdb):
         mock_tmdb.side_effect = [
             None,
             _movie("123", "Mystery Movie", "2024")
@@ -890,10 +895,10 @@ class ProcessDirectoryTests(TempDirTestCase):
         os.makedirs(movie_folder)
         _write(os.path.join(movie_folder, "mystery.2024.mkv"), "fake video data")
 
-        no_hit_path = process_directory(movie_folder)
-        recovered_path = process_directory(no_hit_path)
+        organized_path = process_directory(movie_folder)
+        recovered_path = process_directory(organized_path)
 
-        self.assertEqual(mock_tmdb.call_args_list[1].args[:2], ("Mystery Movie", "2024"))
+        self.assertEqual(mock_tmdb.call_args_list[1].args[:2], ("mystery", "2024"))
         self.assertFalse(os.path.basename(recovered_path).startswith("no_hit_"))
         self.assertIn("Mystery_Movie_(2024)", os.path.basename(recovered_path))
         self.assertIn("1080p_BluRay_DTS_5.1", os.path.basename(recovered_path))

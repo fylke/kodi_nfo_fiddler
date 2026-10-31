@@ -454,12 +454,12 @@ def prepare_mkv(directory_path, filename, remux_mp4):
 def resolve_naming(metadata):
     """
     Looks the movie up on TMDB and returns (tmdb_id, nfo_title, folder_title, year).
-    A miss keeps the parsed title and prefixes the folder title with no_hit_.
+    A miss keeps the parsed title and warns that TMDB metadata was unavailable.
     """
     movie = search_tmdb(metadata['title'], metadata['year'])
     if movie is None:
-        print_warning(f"No TMDB hit for '{metadata['title']}'. Tagging directory with prefix 'no_hit_'...")
-        return None, metadata['title'], f"no_hit_{metadata['title']}", metadata['year']
+        print_warning(f"No TMDB match found for '{metadata['title']}'. Using the parsed title and year.")
+        return None, metadata['title'], metadata['title'], metadata['year']
 
     # Use the official TMDB title and release year for naming
     return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or None
@@ -725,8 +725,8 @@ def write_nfo_xml(path, root_tag, fields):
 
 def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filename=None, original_directory=None):
     """
-    Writes a Kodi movie NFO. Without a tmdb_id (a no-hit) the unique ids are omitted
-    and kodi_nfo_url is left empty. The original_* fields let a no-hit be retried later.
+    Writes a Kodi movie NFO. Without a tmdb_id the unique ids are omitted
+    and kodi_nfo_url is left empty. The original_* fields preserve the source names.
     """
     fields = []
     if original_filename:
