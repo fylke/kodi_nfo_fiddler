@@ -2,7 +2,7 @@
   "name": "Kodi NFO Fiddler",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "."
   },
   "remoteUser": "vscode",
   "postCreateCommand": "python -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/python -m pip install requests python-dotenv ruff",

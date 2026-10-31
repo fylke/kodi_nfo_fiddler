@@ -33,9 +33,7 @@ REMOVE_EXTENSIONS = ('.txt', '.jpg')
 # Each normalized source tag with the spellings that map to it, checked in order.
 SOURCES = [
     ("BluRay", ("BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip")),
-    ("WEBRip", ("WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB")),
-    ("HDTV", ("HDTV",)),
-    ("PDTV", ("PDTV",)),
+    ("WEBRip", ("WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB", "HDTV", "PDTV")),
     ("DVD", ("DVDRip", "DVDR", "DVD")),
 ]
 RESOLUTION_TAGS = ("2160p", "1080p", "720p", "480p")
