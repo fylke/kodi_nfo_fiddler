@@ -399,7 +399,7 @@ def remove_sample_entries(directory):
 def sanitize_folder_name(name):
     """Sanitizes folder names, keeps spaces/commas, then replaces spaces with underscores."""
     name = name.replace(":", "_-")
-    sanitized = re.sub(r"[^\w\s().,!'-]", '', name)
+    sanitized = re.sub(r"[^\w\s().,!&'#+@;\[\]-]", '', name)
     return sanitized.replace(" ", "_")
 
 def get_original_directory(directory_path):

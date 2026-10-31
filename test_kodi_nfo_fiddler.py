@@ -582,11 +582,12 @@ class FilenameParsingTests(TempDirTestCase):
         )
 
     def test_sanitize_folder_name(self):
-        raw_name = "The Movie: Director's! Cut (2024) (1080p, BluRay, DTS, 5.1)"
-        expected = "The_Movie_-_Director's!_Cut_(2024)_(1080p,_BluRay,_DTS,_5.1)"
+        raw_name = "The Movie &: Director's! Cut + #1 @Home; [Extended] (2024)"
+        expected = "The_Movie_&_-_Director's!_Cut_+_#1_@Home;_[Extended]_(2024)"
 
         sanitized = sanitize_folder_name(raw_name)
         self.assertEqual(sanitized, expected)
+        self.assertEqual(sanitize_folder_name('A/B\\C:D?E*F"G<H>I|J'), "ABC_-DEFGHIJ")
 
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_collect_metadata_strict_fallback_when_not_mkv(self, mock_mkv):
