@@ -115,12 +115,13 @@ def find_sidecar_subtitles(video_path):
         subtitles[language].sort(key=str.casefold)
     return subtitles
 
-def has_english_subtitle_file(directory):
-    """True if the directory holds a subtitle file whose name ends in an English tag (e.g. name.en.srt)."""
+def find_english_subtitle_files(directory):
+    """Lists subtitle files in the directory whose names end in an English tag (e.g. name.en.srt)."""
     try:
-        filenames = os.listdir(directory)
+        filenames = sorted(os.listdir(directory), key=str.casefold)
     except OSError:
-        return False
+        return []
+    found = []
     for filename in filenames:
         stem, extension = os.path.splitext(filename)
         if extension.lower() not in SUBTITLE_EXTENSIONS or not os.path.isfile(os.path.join(directory, filename)):
@@ -128,17 +129,17 @@ def has_english_subtitle_file(directory):
         # Only the trailing tokens count, so a title word like "English" doesn't match
         tokens = [token.casefold() for token in re.split(r"[ ._-]+", stem) if token]
         if any(token in SUBTITLE_LANGUAGES["en"] for token in tokens[-2:]):
-            return True
-    return False
+            found.append(os.path.join(directory, filename))
+    return found
 
-def remux_mp4_to_mkv(mp4_path):
-    """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
-    subtitles = find_sidecar_subtitles(mp4_path)
-    output_path = os.path.join(os.path.dirname(mp4_path), f".kodi_nfo_fiddler_{uuid.uuid4().hex}.mkv")
-
-    command = ["mkvmerge", "-o", output_path, mp4_path]
-    # English first; the first subtitle track overall is the default
-    ordered_subtitles = [(path, "eng") for path in subtitles["en"]] + [(path, "swe") for path in subtitles["sv"]]
+def mux_with_subtitles(source_path, ordered_subtitles, action):
+    """
+    Runs mkvmerge on source_path plus (path, language) subtitles into a temporary MKV next to it.
+    Returns the temporary path, or None (with a warning "Failed to <action>" and nothing left behind) on failure.
+    """
+    output_path = os.path.join(os.path.dirname(source_path), f".kodi_nfo_fiddler_{uuid.uuid4().hex}.mkv")
+    command = ["mkvmerge", "-o", output_path, source_path]
+    # The first subtitle track added is the default
     for index, (subtitle_path, language) in enumerate(ordered_subtitles):
         command.extend([
             "--language", f"0:{language}",
@@ -151,10 +152,9 @@ def remux_mp4_to_mkv(mp4_path):
         # mkvmerge exits with 1 when it finished but had warnings; 2 means failure
         if result.returncode <= 1 and os.path.isfile(output_path):
             if result.returncode == 1:
-                print_warning(f"mkvmerge reported warnings for '{os.path.basename(mp4_path)}': {result.stdout.strip()}")
-            # The subtitles are embedded now, so the sidecar files would only be orphaned
-            for leftover_path in [mp4_path] + [path for path, _ in ordered_subtitles]:
-                os.remove(leftover_path)
+                print_warning(
+                    f"mkvmerge reported warnings for '{os.path.basename(source_path)}': {result.stdout.strip()}"
+                )
             return output_path
         error_details = (
             result.stdout.strip()
@@ -164,10 +164,44 @@ def remux_mp4_to_mkv(mp4_path):
     except OSError as error:
         error_details = error
 
-    print_warning(f"Failed to convert '{os.path.basename(mp4_path)}' to MKV: {error_details}")
+    print_warning(f"Failed to {action.format(name=os.path.basename(source_path))}: {error_details}")
     if os.path.exists(output_path):
         os.remove(output_path)
     return None
+
+def remove_files(paths):
+    """Removes files that are no longer needed, warning about any that can't be removed."""
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError as error:
+            print_warning(f"Could not remove '{path}': {error}")
+
+def remux_mp4_to_mkv(mp4_path):
+    """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
+    subtitles = find_sidecar_subtitles(mp4_path)
+    # English first, so its track is the default
+    ordered_subtitles = [(path, "eng") for path in subtitles["en"]] + [(path, "swe") for path in subtitles["sv"]]
+    output_path = mux_with_subtitles(mp4_path, ordered_subtitles, "convert '{name}' to MKV")
+    if output_path is None:
+        return None
+    # The subtitles are embedded now, so the sidecar files would only be orphaned
+    remove_files([mp4_path] + [path for path, _ in ordered_subtitles])
+    return output_path
+
+def embed_english_subtitles(mkv_path, subtitle_paths):
+    """Adds English subtitle files to an MKV in place, then removes them. Returns True on success."""
+    output_path = mux_with_subtitles(mkv_path, [(path, "eng") for path in subtitle_paths], "add subtitles to '{name}'")
+    if output_path is None:
+        return False
+    try:
+        os.replace(output_path, mkv_path)
+    except OSError as error:
+        print_warning(f"Could not replace '{os.path.basename(mkv_path)}' with the muxed file: {error}")
+        remove_files([output_path])
+        return False
+    remove_files(subtitle_paths)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -547,11 +581,17 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
 
         # Prefer the original directory metadata when retrying a previous no-hit.
         metadata = collect_metadata(stored_directory or filename, file_path)
-        has_english_sidecar = (
-            find_sidecar_subtitles(file_path)["en"] or (not is_root and has_english_subtitle_file(directory_path))
-        )
-        if not metadata.get("english_subtitles", False) and not has_english_sidecar:
-            print_warning(f"No English subtitles found in '{filename}'.")
+        if not metadata.get("english_subtitles", False):
+            # Loose root files only match sidecars named after them; in a movie folder any English subtitle file counts
+            sidecars = find_sidecar_subtitles(file_path)["en"]
+            if not is_root:
+                sidecars += find_english_subtitle_files(directory_path)
+            sidecars = list(dict.fromkeys(sidecars))
+            if sidecars and file_path.lower().endswith('.mkv'):
+                print(f"[+] Adding {len(sidecars)} English subtitle file(s) to '{filename}'")
+                metadata["english_subtitles"] = embed_english_subtitles(file_path, sidecars)
+            if not sidecars:
+                print_warning(f"No English subtitles found in '{filename}'.")
 
         unknown_tags = [
             key.replace('_', ' ')

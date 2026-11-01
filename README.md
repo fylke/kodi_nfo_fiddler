@@ -49,6 +49,7 @@ For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. Loose videos in 
 - **Several videos in one folder:** the largest video is treated as the movie. Smaller `.mkv` files are deleted when the largest is at least twice the size of the next one, and other smaller videos are left alone with a warning. If the two largest videos are within a factor of two of each other, the whole folder is skipped.
 - **Name collisions:** an existing file or folder with the target name is never overwritten; the item is skipped with a warning.
 - **Cleanup:** after a video is successfully organized, `.txt` and `.jpg` files, `Featurettes` folders and entries starting with `sample` are removed from its folder. Folders skipped as ambiguous or lacking required metadata are left untouched.
+- **Subtitles:** an MKV without an English subtitle track gets English subtitle files added with `mkvmerge` (the file is rewritten in place and the subtitle files are removed afterwards). For a loose video in the target directory only files named after the video count (`Movie.en.srt`); for a video in an existing folder any subtitle file in that folder ending in `en`, `eng` or `english` counts (`name.en.srt`). If the muxing fails, the files are left untouched with a warning. Without any English subtitles a warning is printed.
 - **Non-MKV videos:** skipped unless you use `--remux-mp4` (below).
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.

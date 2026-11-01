@@ -16,6 +16,7 @@ from kodi_nfo_fiddler import (
     collect_metadata,
     describe_audio,
     detect_source,
+    embed_english_subtitles,
     find_sidecar_subtitles,
     get_mkv_metadata,
     is_language,
@@ -356,6 +357,45 @@ class SubtitleAndRemuxTests(TempDirTestCase):
         self.assertIsNotNone(output_path)
         self.assertFalse(os.path.exists(mp4_path))
         self.assertTrue(any("warnings" in call.args[0] for call in mock_print.call_args_list))
+
+
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_embed_english_subtitles_replaces_mkv_and_removes_sidecars(self, mock_run):
+        mkv_path = os.path.join(self.test_dir, "Movie.mkv")
+        subtitle_paths = [os.path.join(self.test_dir, name) for name in ("a.en.srt", "b.eng.srt")]
+        for path in [mkv_path, *subtitle_paths]:
+            _write(path, "original")
+
+        def create_output(command, **kwargs):
+            _write(command[command.index("-o") + 1], "muxed")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = create_output
+
+        self.assertTrue(embed_english_subtitles(mkv_path, subtitle_paths))
+
+        with open(mkv_path) as mkv_file:
+            self.assertEqual(mkv_file.read(), "muxed")
+        self.assertFalse(any(os.path.exists(path) for path in subtitle_paths))
+        self.assertEqual(sorted(os.listdir(self.test_dir)), ["Movie.mkv"])
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[command.index("--default-track-flag") + 1], "0:yes")
+
+    @patch("kodi_nfo_fiddler.subprocess.run")
+    def test_embed_english_subtitles_failure_keeps_mkv_and_sidecars(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=2, stdout="Error: boom", stderr="")
+        mkv_path = os.path.join(self.test_dir, "Movie.mkv")
+        subtitle_path = os.path.join(self.test_dir, "name.en.srt")
+        _write(mkv_path, "original")
+        _write(subtitle_path, "subtitle")
+
+        with patch("builtins.print") as mock_print:
+            self.assertFalse(embed_english_subtitles(mkv_path, [subtitle_path]))
+
+        with open(mkv_path) as mkv_file:
+            self.assertEqual(mkv_file.read(), "original")
+        self.assertEqual(sorted(os.listdir(self.test_dir)), ["Movie.mkv", "name.en.srt"])
+        self.assertTrue(any("Failed to add subtitles" in call.args[0] for call in mock_print.call_args_list))
 
 
 class MkvMetadataTests(TempDirTestCase):
@@ -820,21 +860,53 @@ class ProcessDirectoryTests(TempDirTestCase):
 
         self.assertTrue(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
 
+    @patch('kodi_nfo_fiddler.subprocess.run')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     @patch('kodi_nfo_fiddler.search_tmdb')
-    def test_process_directory_does_not_warn_when_folder_has_english_sidecar(self, mock_tmdb, mock_mkv):
+    def test_process_directory_embeds_english_sidecar_into_mkv_without_subtitles(self, mock_tmdb, mock_mkv, mock_run):
         mock_tmdb.return_value = _movie("27205", "Inception", "2010")
         mock_mkv.return_value = _mkv_info(english_subtitles=False)
 
+        def create_output(command, **kwargs):
+            _write(command[command.index("-o") + 1], "muxed")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = create_output
+        movie_dir = os.path.join(self.test_dir, "Inception_Folder")
+        os.makedirs(movie_dir)
+        _write(os.path.join(movie_dir, "inception.BluRay.mkv"), "test")
+        subtitle_path = os.path.join(movie_dir, "name.en.srt")
+        _write(subtitle_path, "subtitle")
+
+        with patch('builtins.print') as mock_print:
+            new_dir = process_directory(movie_dir)
+
+        command = mock_run.call_args.args[0]
+        self.assertIn(subtitle_path, command)
+        self.assertIn("0:eng", command)
+        self.assertFalse(os.path.exists(subtitle_path))
+        organized_name = "Inception_(2010)_(1080p_BluRay_DTS_5.1)"
+        with open(os.path.join(new_dir, f"{organized_name}.mkv")) as video_file:
+            self.assertEqual(video_file.read(), "muxed")
+        self.assertFalse(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
+
+    @patch('kodi_nfo_fiddler.subprocess.run')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_does_not_touch_mkv_that_already_has_english_subtitles(
+        self, mock_tmdb, mock_mkv, mock_run
+    ):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info(english_subtitles=True)
         movie_dir = os.path.join(self.test_dir, "Inception_Folder")
         os.makedirs(movie_dir)
         _write(os.path.join(movie_dir, "inception.BluRay.mkv"), "test")
         _write(os.path.join(movie_dir, "name.en.srt"), "subtitle")
 
-        with patch('builtins.print') as mock_print:
-            process_directory(movie_dir)
+        new_dir = process_directory(movie_dir)
 
-        self.assertFalse(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
+        mock_run.assert_not_called()
+        self.assertTrue(os.path.exists(os.path.join(new_dir, "name.en.srt")))
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
