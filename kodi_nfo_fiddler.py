@@ -115,6 +115,22 @@ def find_sidecar_subtitles(video_path):
         subtitles[language].sort(key=str.casefold)
     return subtitles
 
+def has_english_subtitle_file(directory):
+    """True if the directory holds a subtitle file whose name ends in an English tag (e.g. name.en.srt)."""
+    try:
+        filenames = os.listdir(directory)
+    except OSError:
+        return False
+    for filename in filenames:
+        stem, extension = os.path.splitext(filename)
+        if extension.lower() not in SUBTITLE_EXTENSIONS or not os.path.isfile(os.path.join(directory, filename)):
+            continue
+        # Only the trailing tokens count, so a title word like "English" doesn't match
+        tokens = [token.casefold() for token in re.split(r"[ ._-]+", stem) if token]
+        if any(token in SUBTITLE_LANGUAGES["en"] for token in tokens[-2:]):
+            return True
+    return False
+
 def remux_mp4_to_mkv(mp4_path):
     """Remux an MP4 and matching English/Swedish subtitles, then remove the MP4."""
     subtitles = find_sidecar_subtitles(mp4_path)
@@ -531,7 +547,10 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
 
         # Prefer the original directory metadata when retrying a previous no-hit.
         metadata = collect_metadata(stored_directory or filename, file_path)
-        if not metadata.get("english_subtitles", False):
+        has_english_sidecar = (
+            find_sidecar_subtitles(file_path)["en"] or (not is_root and has_english_subtitle_file(directory_path))
+        )
+        if not metadata.get("english_subtitles", False) and not has_english_sidecar:
             print_warning(f"No English subtitles found in '{filename}'.")
 
         unknown_tags = [

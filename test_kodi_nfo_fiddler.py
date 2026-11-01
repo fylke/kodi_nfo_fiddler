@@ -820,6 +820,22 @@ class ProcessDirectoryTests(TempDirTestCase):
 
         self.assertTrue(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
 
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    def test_process_directory_does_not_warn_when_folder_has_english_sidecar(self, mock_tmdb, mock_mkv):
+        mock_tmdb.return_value = _movie("27205", "Inception", "2010")
+        mock_mkv.return_value = _mkv_info(english_subtitles=False)
+
+        movie_dir = os.path.join(self.test_dir, "Inception_Folder")
+        os.makedirs(movie_dir)
+        _write(os.path.join(movie_dir, "inception.BluRay.mkv"), "test")
+        _write(os.path.join(movie_dir, "name.en.srt"), "subtitle")
+
+        with patch('builtins.print') as mock_print:
+            process_directory(movie_dir)
+
+        self.assertFalse(any("No English subtitles found" in call.args[0] for call in mock_print.call_args_list))
+
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
     def test_process_directory_single_file_renames_parent_folder(self, mock_mkv, mock_tmdb):
