@@ -37,10 +37,10 @@ python3 kodi_nfo_fiddler.py /path/to/movies
 Each MKV is looked up on TMDB and renamed to:
 
 ```text
-Title_(Year)_(resolution_source_audioCodec_channels[_Atmos])
+Title[_-_Director's_Cut]_(Year)_(resolution_source_audioCodec_channels[_Atmos])
 ```
 
-For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. Loose videos in the target directory get their own folder; videos in an existing subfolder keep their place and the folder is renamed to match. A matching `.nfo` is written next to the video.
+For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. When the source name contains `Director's Cut` or `Directors Cut`, the video name includes `_-_Director's_Cut` before the year; the movie title used for TMDB and the NFO is unchanged. Loose videos in the target directory get their own folder; videos in an existing subfolder keep their place and the folder is renamed to match. A matching `.nfo` is written next to the video.
 
 - **Technical tags:** resolution, audio codec, channel layout and the optional `Atmos` tag (always last) are read from the MKV with `mkvmerge`. The source comes from the file name or, failing that, its parent folder name.
 - **Sources:** `BluRay`, `WEBRip`, `HDTV`, `PDTV` and `DVD`. Variants are normalized: `Blu-Ray`, `Blu Ray`, `BDRemux`, `BRRip` and `BDRip` become `BluRay`; `WEB-DL`, `WEBDL`, `HDRip` and `WEB` become `WEBRip`; `DVDRip` and `DVDR` become `DVD`. A bare `REMUX` is not recognized.

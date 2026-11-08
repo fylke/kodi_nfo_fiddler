@@ -45,6 +45,7 @@ TITLE_CUTOFF_PATTERN = re.compile(
     ) + r")\b",
     re.IGNORECASE,
 )
+DIRECTORS_CUT_PATTERN = re.compile(r"\bdirector'?s[\s-]+cut\b", re.IGNORECASE)
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
@@ -318,7 +319,7 @@ def parse_filename(filename, file_path):
     Title and Year for TMDB API optimization, plus the source tag.
     Reads no files; the parent folder name of file_path is only used as a source hint.
     """
-    metadata = {"title": "", "year": None, "source": None}
+    metadata = {"title": "", "year": None, "source": None, "directors_cut": False}
 
     # Strip extension
     base_name, _ = os.path.splitext(filename)
@@ -329,6 +330,7 @@ def parse_filename(filename, file_path):
 
     # Replace common separators with spaces to standardize tokenization
     clean_name = base_name.replace('_', ' ').replace('.', ' ')
+    metadata["directors_cut"] = bool(DIRECTORS_CUT_PATTERN.search(clean_name))
 
     # Extract Year: allow it to immediately follow a title, but not another digit.
     year_match = re.search(r'(?<!\d)(19\d{2}|2\d{3})\b', clean_name)
@@ -342,6 +344,7 @@ def parse_filename(filename, file_path):
         title_part = TITLE_CUTOFF_PATTERN.split(clean_name)[0]
 
     # Clean up the extracted title string
+    title_part = DIRECTORS_CUT_PATTERN.sub(' ', title_part)
     title_part = re.sub(r'[\(\)\[\]\-\+]', ' ', title_part) # Strip parentheses/brackets
     title_part = re.sub(r'\s+', ' ', title_part).strip()     # Normalize spaces
     metadata["title"] = title_part
@@ -515,12 +518,15 @@ def resolve_naming(metadata):
     return movie["tmdb_id"], movie["title"], movie["title"], movie["year"] or None
 
 def build_new_name(metadata, folder_title, year):
-    """Builds the clean Title_(Year)_(resolution_source_codec_channels[_Atmos]) name."""
+    """Builds the clean Title[_-_Director's_Cut]_(Year)_(resolution_source_codec_channels[_Atmos]) name."""
     parts = [metadata['resolution'], metadata['source'], metadata['audio_codec'], metadata['audio_channels']]
     if metadata.get('audio_atmos'):
         parts.append("Atmos")
     metadata_suffix = sanitize_folder_name(f"({'_'.join(parts)})")
-    return f"{sanitize_folder_name(folder_title)}_({year})_{metadata_suffix}"
+    title = sanitize_folder_name(folder_title)
+    if metadata.get("directors_cut"):
+        title += "_-_Director's_Cut"
+    return f"{title}_({year})_{metadata_suffix}"
 
 def rename_directory(directory_path, new_name):
     """Renames a directory to new_name and returns its resulting path."""

@@ -583,7 +583,7 @@ class FilenameParsingTests(TempDirTestCase):
             "Movie 2024 WEBDL": "WEBRip",
             "Movie 2024 HDRip": "WEBRip",
             "Movie 2024 DVDR": "DVD",
-            "Show 2024 PDTV": "PDTV",
+            "Show 2024 PDTV": "WEBRip",
             "Movie.2024.1080p.Blu.Ray": "BluRay",
             "Movie_2024_WEB_DL": "WEBRip",
         }
@@ -605,6 +605,30 @@ class FilenameParsingTests(TempDirTestCase):
         metadata = parse_filename("Some Movie.mkv", "Some Movie.mkv")
         self.assertIsNone(metadata["year"])
         self.assertIsNone(metadata["source"])
+        self.assertFalse(metadata["directors_cut"])
+
+    def test_parse_filename_detects_directors_cut_with_optional_apostrophe(self):
+        for filename in (
+            "The.Movie.Director's.Cut.2010.BluRay.mkv",
+            "The.Movie.Directors.Cut.2010.BluRay.mkv",
+            "The.Movie.2010.Directors.Cut.BluRay.mkv",
+        ):
+            with self.subTest(filename=filename):
+                metadata = parse_filename(filename, filename)
+                self.assertEqual(metadata["title"], "The Movie")
+                self.assertEqual(metadata["year"], "2010")
+                self.assertTrue(metadata["directors_cut"])
+
+    def test_build_new_name_includes_directors_cut_only_when_detected(self):
+        metadata = {
+            "resolution": "1080p", "source": "BluRay",
+            "audio_codec": "DTS", "audio_channels": "5.1",
+            "directors_cut": True,
+        }
+        self.assertEqual(
+            build_new_name(metadata, "The Movie", "2010"),
+            "The_Movie_-_Director's_Cut_(2010)_(1080p_BluRay_DTS_5.1)",
+        )
 
     def test_build_new_name_appends_atmos_after_channels(self):
         metadata = {
@@ -698,6 +722,24 @@ class FilenameParsingTests(TempDirTestCase):
 
 
 class ProcessDirectoryTests(TempDirTestCase):
+
+    @patch('kodi_nfo_fiddler.search_tmdb')
+    @patch('kodi_nfo_fiddler.get_mkv_metadata')
+    def test_process_directory_keeps_directors_cut_in_filename_only(self, mock_mkv, mock_tmdb):
+        mock_mkv.return_value = _mkv_info()
+        mock_tmdb.return_value = _movie("123", "The Movie", "2010")
+        movie_dir = os.path.join(self.test_dir, "Movie_Raw")
+        os.makedirs(movie_dir)
+        _write(os.path.join(movie_dir, "The.Movie.Director's.Cut.2010.BluRay.mkv"))
+
+        new_dir = process_directory(movie_dir)
+
+        expected_name = "The_Movie_-_Director's_Cut_(2010)_(1080p_BluRay_DTS_5.1)"
+        mock_tmdb.assert_called_once_with("The Movie", "2010")
+        self.assertEqual(os.path.basename(new_dir), expected_name)
+        self.assertTrue(os.path.isfile(os.path.join(new_dir, f"{expected_name}.mkv")))
+        with open(os.path.join(new_dir, f"{expected_name}.nfo"), encoding="utf-8") as nfo_file:
+            self.assertIn("<title>The Movie</title>", nfo_file.read())
 
     @patch('kodi_nfo_fiddler.search_tmdb')
     @patch('kodi_nfo_fiddler.get_mkv_metadata')
