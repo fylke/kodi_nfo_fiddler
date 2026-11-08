@@ -6,7 +6,8 @@ A small Python utility that takes in messy video file names, extracts MKV metada
 
 - Python 3.12 or newer
 - `mkvmerge` from the `mkvtoolnix` package
-- A TMDB read access token for live lookups
+- A TMDB read access token for movie lookups
+- A TVDB API key for creating TV show NFOs (and a subscriber PIN if required by the key)
 
 The repository includes a VS Code dev container that provides Python and `mkvmerge` automatically.
 
@@ -16,6 +17,8 @@ Set `TMDB_READ_TOKEN` in a `.env` file in the project directory:
 
 ```dotenv
 TMDB_READ_TOKEN=your_tmdb_read_access_token
+TVDB_API_KEY=your_tvdb_api_key
+# TVDB_PIN=your_subscriber_pin
 ```
 
 ## Run
@@ -43,7 +46,7 @@ Title[_-_Director's_Cut]_(Year)_(resolution_source_audioCodec_channels[_Atmos])
 For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. When the source name contains `Director's Cut` or `Directors Cut`, the video name includes `_-_Director's_Cut` before the year; the movie title used for TMDB and the NFO is unchanged. Loose videos in the target directory get their own folder; videos in an existing subfolder keep their place and the folder is renamed to match. A matching `.nfo` is written next to the video.
 
 - **Technical tags:** resolution, audio codec, channel layout and the optional `Atmos` tag (always last) are read from the MKV with `mkvmerge`. The source comes from the file name or, failing that, its parent folder name.
-- **Sources:** `BluRay`, `WEBRip`, `HDTV`, `PDTV` and `DVD`. Variants are normalized: `Blu-Ray`, `Blu Ray`, `BDRemux`, `BRRip` and `BDRip` become `BluRay`; `WEB-DL`, `WEBDL`, `HDRip` and `WEB` become `WEBRip`; `DVDRip` and `DVDR` become `DVD`. A bare `REMUX` is not recognized.
+- **Sources:** `BluRay`, `WEBRip`, `HDTV`, `PDTV` and `DVD`. Variants are normalized: `Blu-Ray`, `Blu Ray`, `BR`, `BDRemux`, `BRRip` and `BDRip` become `BluRay`; `WEB-DL`, `WEBDL`, `HDRip` and `WEB` become `WEBRip`; `DVDRip` and `DVDR` become `DVD`. A bare `REMUX` is not recognized.
 - **Unknown values:** if the resolution, source, audio codec, channel count or year cannot be determined, the file is left untouched and a warning is printed. Nothing is renamed and no NFO is written for it.
 - **No TMDB match:** a warning is printed and the parsed title and year are used for naming. The year must still be known for the rename to happen; running the tool again retries the TMDB lookup.
 - **Several videos in one folder:** the largest video is treated as the movie. Smaller `.mkv` files are deleted when the largest is at least twice the size of the next one, and other smaller videos are left alone with a warning. If the two largest videos are within a factor of two of each other, the whole folder is skipped.
@@ -54,17 +57,15 @@ For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. When the source 
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 
-## Upgrading legacy NFO files
+## Creating TV show NFO files
 
-Upgrade legacy NFO files with `--upgrade-nfo`. This walks the directory recursively and rewrites plain-text NFO files into Kodi XML. It runs on its own and does not organize or remux videos:
+Create missing `tvshow.nfo` files with `--create-tvshow-nfo`. Run it on a directory containing multiple show folders; it visits each folder recursively and creates an NFO for each matching show. It runs on its own and does not organize or remux videos or upgrade existing NFOs:
 
 ```bash
-python3 kodi_nfo_fiddler.py --upgrade-nfo /path/to/movies
+python3 kodi_nfo_fiddler.py --create-tvshow-nfo /path/to/shows
 ```
 
-- **Movies:** an NFO containing only an IMDB or TMDB movie link becomes a Kodi `<movie>` NFO with a TMDB `uniqueid` (the IMDB id is kept as a second `uniqueid`). IMDB links are resolved through the TMDB API.
-- **TV shows:** a plain-text `tvshow.nfo` containing an IMDB, TMDB (`/tv/`) or TVDB (`?tab=series&id=` / `dereferrer/series/`) link becomes a Kodi `<tvshow>` NFO. Any other NFO file name with a TMDB `/tv/` or TVDB link is upgraded the same way and written as `tvshow.nfo` (the misnamed file is removed; if a `tvshow.nfo` already exists it is skipped), because Kodi only reads show metadata from `tvshow.nfo`. A bare IMDB link in a differently named file is treated as a movie. TheTVDB is Kodi's default TV scraper, so the TVDB id is written as the default `uniqueid`, with TMDB and IMDB ids alongside. The TVDB id is looked up through the TMDB API. Per-episode NFOs are not touched.
-- NFOs that are already XML are left alone, as are files TMDB cannot match.
+For each show directory, episode filenames must start with the show name followed by `_-_S01E01`, for example `Breaking_Bad_-_S01E01.mkv`. The name before that marker is searched on TVDB with underscores replaced by spaces; the first series result supplies the title, year and default TVDB ID. The NFO is created alongside the episodes. An existing `tvshow.nfo` is never changed, directories containing multiple show names are skipped, and no NFO is created if TVDB finds no match.
 
 ## Remuxing MP4 files
 

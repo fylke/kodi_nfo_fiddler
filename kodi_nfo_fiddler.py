@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 TMDB_READ_TOKEN = None
 
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
+TVDB_API_BASE_URL = "https://api4.thetvdb.com/v4"
 TMDB_HOST = "themoviedb.org"
 TMDB_MOVIE_BASE_URL = f"https://www.{TMDB_HOST}/movie/"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
@@ -32,7 +34,7 @@ MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 # Each normalized source tag with the spellings that map to it, checked in order.
 SOURCES = [
-    ("BluRay", ("BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip")),
+    ("BluRay", ("BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip", "BR")),
     ("WEBRip", ("WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB", "HDTV", "PDTV")),
     ("DVD", ("DVDRip", "DVDR", "DVD")),
 ]
@@ -46,6 +48,7 @@ TITLE_CUTOFF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DIRECTORS_CUT_PATTERN = re.compile(r"\bdirector'?s[\s-]+cut\b", re.IGNORECASE)
+TV_EPISODE_PATTERN = re.compile(r"^(.+?)_-_S\d{2}E\d{2}(?!\d)", re.IGNORECASE)
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
@@ -945,16 +948,115 @@ def upgrade_nfo_files(directory):
 
 
 # ---------------------------------------------------------------------------
+# TV show NFO creation
+# ---------------------------------------------------------------------------
+
+def tvdb_login(api_key, pin=None):
+    """Authenticate with TVDB and return a bearer token."""
+    credentials = {"apikey": api_key}
+    if pin:
+        credentials["pin"] = pin
+    response = requests.post(f"{TVDB_API_BASE_URL}/login", json=credentials, timeout=30)
+    response.raise_for_status()
+    token = response.json()["data"]["token"]
+    if not isinstance(token, str) or not token:
+        raise ValueError("TVDB login returned an invalid token")
+    return token
+
+def search_tvdb_series(title, token):
+    """Return the first TVDB series result, or None when no series matches."""
+    response = requests.get(
+        f"{TVDB_API_BASE_URL}/search",
+        headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+        params={"query": title, "type": "series"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    results = response.json()["data"]
+    if not isinstance(results, list):
+        raise ValueError("TVDB search returned an invalid result list")
+    if not results:
+        return None
+    result = results[0]
+    tvdb_id = str(result["tvdb_id"])
+    name = result["name"]
+    if not tvdb_id.isdigit() or not isinstance(name, str) or not name.strip():
+        raise ValueError("TVDB search returned a series without a valid id and name")
+    return {"title": name, "year": result.get("year"), "tvdb_id": tvdb_id}
+
+def create_tvshow_nfo(directory, show):
+    """Create tvshow.nfo without overwriting an existing file or leaving a partial NFO."""
+    target = os.path.join(directory, "tvshow.nfo")
+    fd, staged_path = tempfile.mkstemp(prefix=".kodi_nfo_fiddler_", suffix=".nfo", dir=directory)
+    os.close(fd)
+    try:
+        write_kodi_tvshow_nfo(staged_path, show)
+        os.link(staged_path, target)
+    finally:
+        os.remove(staged_path)
+
+def create_tvshow_nfos(directory, api_key, pin=None):
+    """Create a TVDB-backed NFO in each directory with matching episode filenames."""
+    counts = {"created": 0, "skipped": 0, "failed": 0}
+    token = None
+
+    def report_walk_error(error):
+        counts["failed"] += 1
+        print_warning(f"Could not scan directory: {error}")
+
+    for current_dir, _, filenames in os.walk(directory, onerror=report_walk_error):
+        if any(filename.lower() == "tvshow.nfo" for filename in filenames):
+            continue
+        titles = {}
+        for filename in sorted(filenames):
+            if not filename.lower().endswith(MEDIA_EXTENSIONS):
+                continue
+            match = TV_EPISODE_PATTERN.match(filename)
+            if match:
+                title = match.group(1).replace("_", " ").strip()
+                if title:
+                    titles[title.casefold()] = title
+        if not titles:
+            continue
+        if len(titles) != 1:
+            print_warning(f"Multiple show names found in '{current_dir}'; skipping directory.")
+            counts["skipped"] += 1
+            continue
+        title = next(iter(titles.values()))
+        try:
+            if token is None:
+                token = tvdb_login(api_key, pin)
+            show = search_tvdb_series(title, token)
+            if show is None:
+                print_warning(f"No TVDB series found for '{title}' in '{current_dir}'.")
+                counts["failed"] += 1
+                continue
+            create_tvshow_nfo(current_dir, show)
+        except FileExistsError:
+            print_warning(f"tvshow.nfo already exists in '{current_dir}'; leaving it unchanged.")
+            counts["skipped"] += 1
+            continue
+        except (requests.RequestException, KeyError, TypeError, ValueError, OSError) as error:
+            print_warning(f"Could not create TV show NFO in '{current_dir}': {error}")
+            counts["failed"] += 1
+            continue
+        counts["created"] += 1
+        print(f"[+] Created TV show NFO: {os.path.join(current_dir, 'tvshow.nfo')} (TVDB {show['tvdb_id']})")
+
+    print(
+        f"TV show NFO creation complete: {counts['created']} created, "
+        f"{counts['skipped']} skipped, {counts['failed']} failed"
+    )
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
 
 def main():
     global TMDB_READ_TOKEN
     load_dotenv()
-    TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
-    if not TMDB_READ_TOKEN:
-        print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
-        sys.exit(1)
 
     parser = argparse.ArgumentParser(description="Organize movie files and write Kodi NFO files.")
     parser.add_argument("directory", nargs="?", default=".", help="directory to process (default: current directory)")
@@ -964,12 +1066,9 @@ def main():
         help="remux MP4 files (plus English/Swedish sidecar subtitles) into MKV and remove the MP4",
     )
     parser.add_argument(
-        "--upgrade-nfo",
+        "--create-tvshow-nfo",
         action="store_true",
-        help=(
-            "recursively upgrade plain-text NFO files to Kodi XML "
-            "(movie NFOs get a TMDB id, tvshow.nfo gets a TVDB id), then exit"
-        ),
+        help="recursively create missing tvshow.nfo files using episode filenames and TVDB, then exit",
     )
     args = parser.parse_args()
     target_dir = args.directory
@@ -981,9 +1080,18 @@ def main():
     target_dir = os.path.abspath(target_dir)
     print(f"Scanning directory: {target_dir}")
 
-    if args.upgrade_nfo:
-        upgrade_nfo_files(target_dir)
+    if args.create_tvshow_nfo:
+        api_key = os.getenv("TVDB_API_KEY")
+        if not api_key:
+            print("Error: TVDB_API_KEY not found. Check your .env file.")
+            sys.exit(1)
+        create_tvshow_nfos(target_dir, api_key, os.getenv("TVDB_PIN"))
         return
+
+    TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
+    if not TMDB_READ_TOKEN:
+        print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
+        sys.exit(1)
 
     # Snapshot the pre-existing subdirectories BEFORE processing loose files
     try:

@@ -14,18 +14,22 @@ from kodi_nfo_fiddler import (
     build_new_name,
     classify_resolution,
     collect_metadata,
+    create_tvshow_nfos,
     describe_audio,
     detect_source,
     embed_english_subtitles,
     find_sidecar_subtitles,
     get_mkv_metadata,
     is_language,
+    main,
     parse_filename,
     print_warning,
     process_directory,
     remux_mp4_to_mkv,
     sanitize_folder_name,
     search_tmdb,
+    search_tvdb_series,
+    tvdb_login,
     upgrade_nfo_file,
     upgrade_nfo_files,
 )
@@ -223,6 +227,144 @@ class NfoUpgradeTests(TempDirTestCase):
 
         with open(path, encoding="utf-8") as nfo:
             self.assertEqual(nfo.read(), original)
+
+
+class TvshowCreationTests(TempDirTestCase):
+
+    @patch("kodi_nfo_fiddler.requests.post")
+    def test_tvdb_login_includes_pin_only_when_provided(self, mock_post):
+        mock_post.return_value = self._tmdb_response({"data": {"token": "token"}})
+        self.assertEqual(tvdb_login("key"), "token")
+        self.assertEqual(mock_post.call_args.kwargs["json"], {"apikey": "key"})
+        self.assertEqual(tvdb_login("key", "pin"), "token")
+        self.assertEqual(mock_post.call_args.kwargs["json"], {"apikey": "key", "pin": "pin"})
+
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_search_tvdb_series_uses_series_query(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "data": [{"name": "Breaking Bad", "tvdb_id": "81189", "year": "2008"}],
+        })
+        self.assertEqual(
+            search_tvdb_series("Breaking Bad", "token"),
+            {"title": "Breaking Bad", "tvdb_id": "81189", "year": "2008"},
+        )
+        self.assertEqual(mock_get.call_args.kwargs["params"], {"query": "Breaking Bad", "type": "series"})
+        self.assertEqual(mock_get.call_args.kwargs["headers"]["Authorization"], "Bearer token")
+
+    @patch("kodi_nfo_fiddler.search_tvdb_series")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_creates_one_nfo_per_show_and_skips_existing_nfos(self, mock_login, mock_search):
+        mock_login.return_value = "token"
+        mock_search.return_value = {"title": "Breaking Bad", "year": "2008", "tvdb_id": "81189"}
+        self._write_nfo("Breaking Bad/Breaking_Bad_-_S01E01.mkv", "video")
+        self._write_nfo("Breaking Bad/Breaking_Bad_-_S01E02.mkv", "video")
+        self._write_nfo("Existing/Existing_-_S01E01.mkv", "video")
+        existing = self._write_nfo("Existing/tvshow.nfo", "do not replace")
+        self._write_nfo("Other/Unrelated.mkv", "video")
+
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts, {"created": 1, "skipped": 0, "failed": 0})
+        mock_login.assert_called_once_with("key", None)
+        mock_search.assert_called_once_with("Breaking Bad", "token")
+        root = ET.parse(os.path.join(self.test_dir, "Breaking Bad", "tvshow.nfo")).getroot()
+        self.assertEqual(root.tag, "tvshow")
+        self.assertEqual(root.findtext("title"), "Breaking Bad")
+        self.assertEqual(root.findtext("year"), "2008")
+        self.assertEqual(root.find("uniqueid[@type='tvdb']").text, "81189")
+        self.assertEqual(root.find("uniqueid[@type='tvdb']").get("default"), "true")
+        with open(existing, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "do not replace")
+
+    @patch("kodi_nfo_fiddler.search_tvdb_series")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_creates_nfos_for_multiple_show_directories(self, mock_login, mock_search):
+        mock_login.return_value = "token"
+        shows = {
+            "First Show": {"title": "First Show", "tvdb_id": "123"},
+            "Second Show": {"title": "Second Show", "tvdb_id": "456"},
+        }
+        mock_search.side_effect = lambda title, token: shows[title]
+        self._write_nfo("First/First_Show_-_S01E01.mkv", "video")
+        self._write_nfo("Second/Second_Show_-_S02E03.mkv", "video")
+        self._write_nfo("Existing/Existing_-_S01E01.mkv", "video")
+        existing = self._write_nfo("Existing/tvshow.nfo", "keep")
+
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts, {"created": 2, "skipped": 0, "failed": 0})
+        mock_login.assert_called_once_with("key", None)
+        self.assertCountEqual(
+            [call.args for call in mock_search.call_args_list],
+            [("First Show", "token"), ("Second Show", "token")],
+        )
+        for directory, expected_id in (("First", "123"), ("Second", "456")):
+            root = ET.parse(os.path.join(self.test_dir, directory, "tvshow.nfo")).getroot()
+            self.assertEqual(root.findtext("uniqueid[@type='tvdb']"), expected_id)
+        with open(existing, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "keep")
+
+    @patch("kodi_nfo_fiddler.search_tvdb_series")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_missing_match_and_ambiguous_directory_do_not_create_nfos(self, mock_login, mock_search):
+        mock_login.return_value = "token"
+        mock_search.return_value = None
+        self._write_nfo("Missing/Missing_Show_-_s01e01.mp4", "video")
+        self._write_nfo("Mixed/First_-_S01E01.mkv", "video")
+        self._write_nfo("Mixed/Second_-_S01E01.mkv", "video")
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts, {"created": 0, "skipped": 1, "failed": 1})
+        mock_search.assert_called_once_with("Missing Show", "token")
+        self.assertFalse(os.path.exists(os.path.join(self.test_dir, "Missing", "tvshow.nfo")))
+        self.assertFalse(os.path.exists(os.path.join(self.test_dir, "Mixed", "tvshow.nfo")))
+
+    @patch("kodi_nfo_fiddler.search_tvdb_series")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_existing_nfo_with_different_case_skips_lookup(self, mock_login, mock_search):
+        self._write_nfo("Show/Show_-_S01E01.mkv", "video")
+        existing = self._write_nfo("Show/TVSHOW.NFO", "keep")
+
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts["created"], 0)
+        mock_login.assert_not_called()
+        mock_search.assert_not_called()
+        with open(existing, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "keep")
+
+    @patch("kodi_nfo_fiddler.os.link", side_effect=FileExistsError("already exists"))
+    @patch("kodi_nfo_fiddler.search_tvdb_series")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_nfo_creation_cleans_staging_file_on_collision(self, mock_login, mock_search, mock_link):
+        mock_login.return_value = "token"
+        mock_search.return_value = {"title": "Show", "tvdb_id": "123"}
+        self._write_nfo("Show/Show_-_S01E01.mkv", "video")
+
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts, {"created": 0, "skipped": 1, "failed": 0})
+        self.assertEqual(os.listdir(os.path.join(self.test_dir, "Show")), ["Show_-_S01E01.mkv"])
+        mock_link.assert_called_once()
+
+    @patch("kodi_nfo_fiddler.tvdb_login", side_effect=requests.ConnectionError("connection failed"))
+    def test_login_failure_does_not_create_nfo(self, mock_login):
+        self._write_nfo("Show/Show_-_S01E01.mkv", "video")
+
+        counts = create_tvshow_nfos(self.test_dir, "key")
+
+        self.assertEqual(counts["failed"], 1)
+        self.assertFalse(os.path.exists(os.path.join(self.test_dir, "Show", "tvshow.nfo")))
+        mock_login.assert_called_once()
+
+    @patch("kodi_nfo_fiddler.load_dotenv")
+    @patch("kodi_nfo_fiddler.create_tvshow_nfos")
+    @patch.dict(os.environ, {"TVDB_API_KEY": "key"}, clear=True)
+    def test_create_tvshow_cli_does_not_require_tmdb_token(self, mock_create, mock_dotenv):
+        with patch("sys.argv", ["kodi_nfo_fiddler.py", "--create-tvshow-nfo", self.test_dir]):
+            main()
+        mock_create.assert_called_once_with(self.test_dir, "key", None)
+        mock_dotenv.assert_called_once()
 
 
 class ConsoleOutputTests(TempDirTestCase):
@@ -578,6 +720,7 @@ class FilenameParsingTests(TempDirTestCase):
         expected = {
             "Movie 2024 Blu Ray": "BluRay",
             "Movie 2024 Blu-Ray": "BluRay",
+            "Movie 2024 BR": "BluRay",
             "Movie 2024 1080p BDRemux": "BluRay",
             "Movie 2024 2160p UHD BluRay REMUX": "BluRay",
             "Movie 2024 WEBDL": "WEBRip",
