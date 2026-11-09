@@ -57,15 +57,17 @@ For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. When the source 
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 
-## Creating TV show NFO files
+## Organizing TV shows
 
-The script creates missing `tvshow.nfo` files when the current working directory or the selected target directory is named exactly `TV-Shows`. It visits the target directory recursively and creates an NFO for each matching show. In this mode it does not organize or remux videos or upgrade existing NFOs:
+When the current working directory or the selected target directory is named exactly `TV-Shows`, the script visits the target directory recursively, creates missing `tvshow.nfo` files and renames episodes:
 
 ```bash
 python3 kodi_nfo_fiddler.py /path/to/TV-Shows
 ```
 
-For each show directory, episode filenames must start with the show name followed by `_-_S01E01`, for example `Breaking_Bad_-_S01E01.mkv`. The name before that marker is searched on TVDB with underscores replaced by spaces; the first series result supplies the title, year and default TVDB ID. The NFO is created alongside the episodes. An existing `tvshow.nfo` is never changed, directories containing multiple show names are skipped, and no NFO is created if TVDB finds no match.
+For each show directory, episode filenames must start with the show name followed by `_-_S01E01`, for example `Breaking_Bad_-_S01E01.mkv`. The name before that marker is searched on TVDB with underscores replaced by spaces. Ambiguous series matches are skipped with a warning. Existing `tvshow.nfo` files are never changed; their TVDB ID identifies the show for episode lookups. If multiple series have the same title, an identified show's directory is renamed to include its year, but episode filenames omit it.
+
+Episodes are named `Show_-_S01E01_-_Episode_(resolution_source_audioCodec_channels[_Atmos]).mkv`, using TVDB's official episode order and the same technical metadata rules as movies. Matching English and Swedish subtitle sidecars are embedded in MKV or MP4 episodes, with English tracks first; they are removed only after successful remuxing and organization. Other matching sidecars, including untagged and other-language subtitles, are renamed alongside the episode. MP4 episodes are remuxed into MKV without re-encoding; other formats are skipped. Missing episode titles or required metadata, conflicting destination names, and shows without a usable TVDB ID cause the affected files to be skipped with a warning.
 
 ## Remuxing MP4 files
 

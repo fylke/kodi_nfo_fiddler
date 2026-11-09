@@ -48,7 +48,7 @@ TITLE_CUTOFF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DIRECTORS_CUT_PATTERN = re.compile(r"\bdirector'?s[\s-]+cut\b", re.IGNORECASE)
-TV_EPISODE_PATTERN = re.compile(r"^(.+?)_-_S\d{2}E\d{2}(?!\d)", re.IGNORECASE)
+TV_EPISODE_PATTERN = re.compile(r"^(.+?)_-_S(\d{2})E(\d{2})(?![\dEe]|[-_. ]+E\d)", re.IGNORECASE)
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
@@ -522,14 +522,18 @@ def resolve_naming(metadata):
 
 def build_new_name(metadata, folder_title, year):
     """Builds the clean Title[_-_Director's_Cut]_(Year)_(resolution_source_codec_channels[_Atmos]) name."""
-    parts = [metadata['resolution'], metadata['source'], metadata['audio_codec'], metadata['audio_channels']]
-    if metadata.get('audio_atmos'):
-        parts.append("Atmos")
-    metadata_suffix = sanitize_folder_name(f"({'_'.join(parts)})")
+    metadata_suffix = build_metadata_suffix(metadata)
     title = sanitize_folder_name(folder_title)
     if metadata.get("directors_cut"):
         title += "_-_Director's_Cut"
     return f"{title}_({year})_{metadata_suffix}"
+
+def build_metadata_suffix(metadata):
+    """Build the shared technical metadata suffix."""
+    parts = [metadata['resolution'], metadata['source'], metadata['audio_codec'], metadata['audio_channels']]
+    if metadata.get('audio_atmos'):
+        parts.append("Atmos")
+    return sanitize_folder_name(f"({'_'.join(parts)})")
 
 def rename_directory(directory_path, new_name):
     """Renames a directory to new_name and returns its resulting path."""
@@ -963,8 +967,8 @@ def tvdb_login(api_key, pin=None):
         raise ValueError("TVDB login returned an invalid token")
     return token
 
-def search_tvdb_series(title, token):
-    """Return the first TVDB series result, or None when no series matches."""
+def tvdb_search_results(title, token):
+    """Return TVDB series search results."""
     response = requests.get(
         f"{TVDB_API_BASE_URL}/search",
         headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
@@ -975,9 +979,22 @@ def search_tvdb_series(title, token):
     results = response.json()["data"]
     if not isinstance(results, list):
         raise ValueError("TVDB search returned an invalid result list")
+    return results
+
+def search_tvdb_series(title, token):
+    """Return an unambiguous TVDB series match, or None when no series matches."""
+    results = tvdb_search_results(title, token)
     if not results:
         return None
-    result = results[0]
+    exact_matches = [
+        item for item in results
+        if isinstance(item.get("name"), str) and item["name"].casefold() == title.casefold()
+    ]
+    if len(exact_matches) > 1:
+        raise ValueError(f"Multiple TVDB series are named '{title}'; skipping ambiguous show")
+    if not exact_matches and len(results) > 1:
+        raise ValueError(f"Multiple TVDB series match '{title}'; skipping ambiguous show")
+    result = exact_matches[0] if exact_matches else results[0]
     tvdb_id = str(result["tvdb_id"])
     name = result["name"]
     if not tvdb_id.isdigit() or not isinstance(name, str) or not name.strip():
@@ -1050,6 +1067,182 @@ def create_tvshow_nfos(directory, api_key, pin=None):
     return counts
 
 
+def tvdb_get(path, token, params=None):
+    """Fetch a TVDB API response."""
+    response = requests.get(
+        f"{TVDB_API_BASE_URL}{path}",
+        headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]
+
+def read_tvdb_nfo_id(path):
+    """Read an existing TVDB series ID without modifying the NFO."""
+    root = ET.parse(path).getroot()
+    value = root.findtext("uniqueid[@type='tvdb']") or root.findtext("tvdbid")
+    if not value or not value.strip().isdigit():
+        raise ValueError(f"No valid TVDB ID in '{path}'")
+    return value.strip()
+
+def episode_sidecars(path):
+    """Find files named after an episode, excluding other video files."""
+    directory = os.path.dirname(path)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    matches = []
+    for name in os.listdir(directory):
+        candidate = os.path.join(directory, name)
+        if not os.path.isfile(candidate) or name == os.path.basename(path):
+            continue
+        if name.lower().endswith(MEDIA_EXTENSIONS) or not name.casefold().startswith(stem.casefold()):
+            continue
+        suffix = name[len(stem):]
+        if suffix and suffix[0] in "._- ":
+            matches.append((candidate, suffix))
+    return matches
+
+def rename_episode_files(video, destination, sidecars, replace_source=None):
+    """Create all destination links before removing any of the original names."""
+    pairs = [(video, destination)] + sidecars
+    pairs = [(source, target) for source, target in pairs if source != target]
+    linked = []
+    try:
+        for source, target in pairs:
+            if target == replace_source:
+                continue
+            os.link(source, target)
+            linked.append(target)
+        if destination == replace_source:
+            os.replace(video, destination)
+    except OSError:
+        for target in linked:
+            try:
+                os.remove(target)
+            except OSError as error:
+                print_warning(f"Could not remove '{target}' after rename failed: {error}")
+        raise
+    for source, _ in pairs:
+        if source == video and destination == replace_source:
+            continue
+        try:
+            os.remove(source)
+        except OSError as error:
+            print_warning(f"Could not remove original '{source}' after rename: {error}")
+
+def organize_tv_episodes(directory, api_key, pin=None):
+    """Rename TV episodes using their existing TVDB show IDs."""
+    token = None
+    def report_walk_error(error):
+        print_warning(f"Could not scan directory: {error}")
+
+    for current_dir, _, filenames in os.walk(directory, topdown=False, onerror=report_walk_error):
+        episodes = [
+            (filename, TV_EPISODE_PATTERN.match(filename))
+            for filename in sorted(filenames)
+            if filename.lower().endswith(MEDIA_EXTENSIONS)
+        ]
+        episodes = [(filename, match) for filename, match in episodes if match]
+        if not episodes:
+            continue
+        nfos = [name for name in filenames if name.lower() == "tvshow.nfo"]
+        if not nfos:
+            print_warning(f"No tvshow.nfo in '{current_dir}'; skipping episodes.")
+            continue
+        staged = None
+        try:
+            original_source = detect_source(os.path.basename(current_dir))
+            show_id = read_tvdb_nfo_id(os.path.join(current_dir, nfos[0]))
+            if token is None:
+                token = tvdb_login(api_key, pin)
+            show = tvdb_get(f"/series/{show_id}", token)
+            title = show["name"]
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("TVDB series has no title")
+            candidates = tvdb_search_results(title, token)
+            same_name_ids = {
+                str(item["tvdb_id"]) for item in candidates
+                if isinstance(item.get("name"), str) and item["name"].casefold() == title.casefold()
+            }
+            if len(same_name_ids) > 1:
+                year = (show.get("firstAired") or "")[:4]
+                if not year.isdigit() or len(year) != 4:
+                    raise ValueError(f"No release year for ambiguous series '{title}'")
+                new_dir = f"{sanitize_folder_name(title)}_({year})"
+                if os.path.basename(current_dir) != "TV-Shows":
+                    current_dir = rename_directory(current_dir, new_dir)
+            for filename, match in episodes:
+                source = os.path.join(current_dir, filename)
+                if not filename.lower().endswith((".mkv", ".mp4")):
+                    print_warning(f"Skipping unsupported episode format: '{source}'.")
+                    continue
+                try:
+                    season, number = int(match.group(2)), int(match.group(3))
+                    data = tvdb_get(
+                        f"/series/{show_id}/episodes/official", token,
+                        {"page": 0, "season": season, "episodeNumber": number},
+                    )
+                    hits = [
+                        episode for episode in data["episodes"]
+                        if episode.get("seasonNumber") == season and episode.get("number") == number
+                    ]
+                    if len(hits) != 1 or not hits[0].get("name"):
+                        print_warning(f"No unique TVDB episode title for '{source}'; skipping.")
+                        continue
+                    sidecars = episode_sidecars(source)
+                    subtitles = find_sidecar_subtitles(source)
+                    ordered_subtitles = (
+                        [(path, "eng") for path in subtitles["en"]]
+                        + [(path, "swe") for path in subtitles["sv"]]
+                    )
+                    embedded_subtitles = {path for path, _ in ordered_subtitles}
+                    video = source
+                    if filename.lower().endswith(".mp4") or ordered_subtitles:
+                        action = (
+                            "convert '{name}' to MKV"
+                            if filename.lower().endswith(".mp4") else "add subtitles to '{name}'"
+                        )
+                        staged = mux_with_subtitles(source, ordered_subtitles, action)
+                        if staged is None:
+                            continue
+                        video = staged
+                    metadata = collect_metadata(filename, video)
+                    metadata["source"] = metadata["source"] or original_source
+                    unknown = [
+                        key for key in ("resolution", "source", "audio_codec", "audio_channels")
+                        if not metadata[key]
+                    ]
+                    if unknown:
+                        print_warning(f"Unknown {', '.join(unknown)} for '{source}'; skipping.")
+                        continue
+                    episode_name = sanitize_folder_name(hits[0]["name"])
+                    if not episode_name:
+                        raise ValueError(f"Invalid episode title for '{source}'")
+                    stem = (
+                        f"{sanitize_folder_name(title)}_-_S{season:02d}E{number:02d}_-_"
+                        f"{episode_name}_{build_metadata_suffix(metadata)}"
+                    )
+                    destination = os.path.join(current_dir, f"{stem}.mkv")
+                    sidecar_pairs = [
+                        (path, os.path.join(current_dir, stem + suffix))
+                        for path, suffix in sidecars if path not in embedded_subtitles
+                    ]
+                    replace_source = source if staged and destination == source else None
+                    rename_episode_files(video, destination, sidecar_pairs, replace_source)
+                    if staged:
+                        staged = None
+                        remove_files(([source] if destination != source else []) + list(embedded_subtitles))
+                    print(f"[+] Renamed episode: {destination}")
+                except (requests.RequestException, KeyError, TypeError, ValueError, OSError) as error:
+                    print_warning(f"Could not organize episode '{source}': {error}")
+                finally:
+                    if staged and os.path.exists(staged):
+                        remove_files([staged])
+                    staged = None
+        except (requests.RequestException, ET.ParseError, KeyError, TypeError, ValueError, OSError) as error:
+            print_warning(f"Could not organize TV show '{current_dir}': {error}")
+
+
 # ---------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------
@@ -1076,6 +1269,7 @@ def main():
             print("Error: TVDB_API_KEY not found. Check your .env file.")
             sys.exit(1)
         create_tvshow_nfos(target_dir, api_key, os.getenv("TVDB_PIN"))
+        organize_tv_episodes(target_dir, api_key, os.getenv("TVDB_PIN"))
         return
 
     TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")

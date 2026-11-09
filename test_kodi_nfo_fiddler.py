@@ -22,6 +22,7 @@ from kodi_nfo_fiddler import (
     get_mkv_metadata,
     is_language,
     main,
+    organize_tv_episodes,
     parse_filename,
     print_warning,
     process_directory,
@@ -231,6 +232,200 @@ class NfoUpgradeTests(TempDirTestCase):
 
 class TvshowCreationTests(TempDirTestCase):
 
+    @patch("kodi_nfo_fiddler.requests.get")
+    def test_search_tvdb_series_rejects_duplicate_exact_names(self, mock_get):
+        mock_get.return_value = self._tmdb_response({
+            "data": [{"name": "Show", "tvdb_id": "1"}, {"name": "Show", "tvdb_id": "2"}],
+        })
+        with self.assertRaisesRegex(ValueError, "Multiple TVDB series"):
+            search_tvdb_series("Show", "token")
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.mux_with_subtitles")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_organize_episode_and_sidecars_using_existing_nfo(
+        self, mock_login, mock_get, mock_search, mock_mux, mock_mkv
+    ):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        source = self._write_nfo("Show/Example_Show_-_S01E02_BluRay.mkv", "video")
+        subtitle = self._write_nfo("Show/Example_Show_-_S01E02_BluRay.en.srt", "subtitle")
+        self._write_nfo("Show/Example_Show_-_S01E02_BluRay.fr.srt", "subtitle")
+        self._write_nfo("Show/Example_Show_-_S01E02_BluRay.nfo", "episode metadata")
+        staged = self._write_nfo("Show/.temporary.mkv", "remuxed")
+        mock_mux.return_value = staged
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Example Show", "tvdb_id": "123"}]
+        mock_mkv.return_value = _mkv_info(audio_atmos=True)
+        mock_get.side_effect = [
+            {"name": "Example Show", "firstAired": "2008-01-01"},
+            {"episodes": [{"seasonNumber": 1, "number": 2, "name": "Pilot: Part 2"}]},
+        ]
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        stem = "Example_Show_-_S01E02_-_Pilot_-_Part_2_(1080p_BluRay_DTS_5.1_Atmos)"
+        self.assertTrue(os.path.isfile(os.path.join(self.test_dir, "Show", stem + ".mkv")))
+        self.assertFalse(os.path.exists(subtitle))
+        self.assertTrue(os.path.isfile(os.path.join(self.test_dir, "Show", stem + ".fr.srt")))
+        self.assertTrue(os.path.isfile(os.path.join(self.test_dir, "Show", stem + ".nfo")))
+        mock_mux.assert_called_once_with(source, [(subtitle, "eng")], "add subtitles to '{name}'")
+        self.assertTrue(os.path.isfile(os.path.join(self.test_dir, "Show", "tvshow.nfo")))
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_duplicate_series_uses_year_only_in_directory(self, mock_login, mock_get, mock_search, mock_mkv):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        self._write_nfo("Show/Show_-_S01E01_BluRay.mkv", "video")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}, {"name": "Show", "tvdb_id": "456"}]
+        mock_get.side_effect = [
+            {"name": "Show", "firstAired": "2008-01-01"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+        mock_mkv.return_value = _mkv_info()
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        expected = "Show_-_S01E01_-_Pilot_(1080p_BluRay_DTS_5.1).mkv"
+        self.assertTrue(os.path.isfile(os.path.join(self.test_dir, "Show_(2008)", expected)))
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.mux_with_subtitles")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_mp4_episode_remuxes_and_renames_sidecars(self, mock_login, mock_get, mock_search, mock_mux, mock_mkv):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        video = self._write_nfo("Show/Show_-_S01E01_BluRay.mp4", "video")
+        english = self._write_nfo("Show/Show_-_S01E01_BluRay.en.srt", "subtitle")
+        swedish = self._write_nfo("Show/Show_-_S01E01_BluRay.sv.srt", "subtitle")
+        self._write_nfo("Show/Show_-_S01E01_BluRay.fr.srt", "subtitle")
+        staged = self._write_nfo("Show/.temporary.mkv", "remuxed")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}]
+        mock_get.side_effect = [
+            {"name": "Show"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+        mock_mux.return_value = staged
+        mock_mkv.return_value = _mkv_info()
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        stem = "Show_-_S01E01_-_Pilot_(1080p_BluRay_DTS_5.1)"
+        self.assertFalse(os.path.exists(video))
+        self.assertFalse(os.path.exists(staged))
+        self.assertTrue(os.path.exists(os.path.join(self.test_dir, "Show", stem + ".mkv")))
+        self.assertFalse(os.path.exists(english))
+        self.assertFalse(os.path.exists(swedish))
+        self.assertTrue(os.path.exists(os.path.join(self.test_dir, "Show", stem + ".fr.srt")))
+        mock_mux.assert_called_once_with(video, [(english, "eng"), (swedish, "swe")], "convert '{name}' to MKV")
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.mux_with_subtitles")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_mp4_episode_with_missing_metadata_keeps_original(
+        self, mock_login, mock_get, mock_search, mock_mux, mock_mkv
+    ):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        video = self._write_nfo("Show/Show_-_S01E01_BluRay.mp4", "video")
+        staged = self._write_nfo("Show/.temporary.mkv", "remuxed")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}]
+        mock_get.side_effect = [
+            {"name": "Show"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+        mock_mux.return_value = staged
+        mock_mkv.return_value = _mkv_info(resolution=None)
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        self.assertTrue(os.path.exists(video))
+        self.assertFalse(os.path.exists(staged))
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_episode_collision_keeps_video_and_sidecar(self, mock_login, mock_get, mock_search, mock_mkv):
+        directory = os.path.join(self.test_dir, "Show")
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        original = "Show_-_S01E01_BluRay.mkv"
+        self._write_nfo(f"Show/{original}", "video")
+        self._write_nfo("Show/Show_-_S01E01_BluRay.fr.srt", "subtitle")
+        target = "Show_-_S01E01_-_Pilot_(1080p_BluRay_DTS_5.1).mkv"
+        self._write_nfo(f"Show/{os.path.splitext(target)[0]}.fr.srt", "keep")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}]
+        mock_mkv.return_value = _mkv_info()
+        mock_get.side_effect = [
+            {"name": "Show"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        self.assertTrue(os.path.exists(os.path.join(directory, original)))
+        self.assertFalse(os.path.exists(os.path.join(directory, target)))
+        self.assertTrue(os.path.exists(os.path.join(directory, "Show_-_S01E01_BluRay.fr.srt")))
+
+    @patch("kodi_nfo_fiddler.get_mkv_metadata")
+    @patch("kodi_nfo_fiddler.mux_with_subtitles")
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_existing_named_episode_embeds_subtitles_in_place(
+        self, mock_login, mock_get, mock_search, mock_mux, mock_mkv
+    ):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        stem = "Show_-_S01E01_-_Pilot_(1080p_BluRay_DTS_5.1)"
+        video = self._write_nfo(f"Show/{stem}.mkv", "original")
+        subtitle = self._write_nfo(f"Show/{stem}.en.srt", "subtitle")
+        staged = self._write_nfo("Show/.temporary.mkv", "remuxed")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}]
+        mock_get.side_effect = [
+            {"name": "Show"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+        mock_mux.return_value = staged
+        mock_mkv.return_value = _mkv_info()
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        with open(video, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "remuxed")
+        self.assertFalse(os.path.exists(subtitle))
+        self.assertFalse(os.path.exists(staged))
+
+    @patch("kodi_nfo_fiddler.mux_with_subtitles", return_value=None)
+    @patch("kodi_nfo_fiddler.tvdb_search_results")
+    @patch("kodi_nfo_fiddler.tvdb_get")
+    @patch("kodi_nfo_fiddler.tvdb_login")
+    def test_failed_subtitle_mux_preserves_episode_and_sidecar(self, mock_login, mock_get, mock_search, mock_mux):
+        self._write_nfo("Show/tvshow.nfo", "<tvshow><uniqueid type='tvdb'>123</uniqueid></tvshow>")
+        video = self._write_nfo("Show/Show_-_S01E01_BluRay.mkv", "video")
+        subtitle = self._write_nfo("Show/Show_-_S01E01_BluRay.en.srt", "subtitle")
+        mock_login.return_value = "token"
+        mock_search.return_value = [{"name": "Show", "tvdb_id": "123"}]
+        mock_get.side_effect = [
+            {"name": "Show"},
+            {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Pilot"}]},
+        ]
+
+        organize_tv_episodes(self.test_dir, "key")
+
+        self.assertTrue(os.path.isfile(video))
+        self.assertTrue(os.path.isfile(subtitle))
+        mock_mux.assert_called_once()
+
     @patch("kodi_nfo_fiddler.requests.post")
     def test_tvdb_login_includes_pin_only_when_provided(self, mock_post):
         mock_post.return_value = self._tmdb_response({"data": {"token": "token"}})
@@ -360,8 +555,9 @@ class TvshowCreationTests(TempDirTestCase):
     @patch("kodi_nfo_fiddler.load_dotenv")
     @patch("kodi_nfo_fiddler.process_directory")
     @patch("kodi_nfo_fiddler.create_tvshow_nfos")
+    @patch("kodi_nfo_fiddler.organize_tv_episodes")
     @patch.dict(os.environ, {"TVDB_API_KEY": "key"}, clear=True)
-    def test_tvshow_mode_for_target_or_working_directory(self, mock_create, mock_process, mock_dotenv):
+    def test_tvshow_mode_for_target_or_working_directory(self, mock_organize, mock_create, mock_process, mock_dotenv):
         tv_dir = os.path.join(self.test_dir, "TV-Shows")
         os.mkdir(tv_dir)
         scenarios = (
@@ -374,7 +570,9 @@ class TvshowCreationTests(TempDirTestCase):
                     patch("os.getcwd", return_value=cwd), patch("sys.argv", argv):
                 main()
                 mock_create.assert_called_once_with(target, "key", None)
+                mock_organize.assert_called_once_with(target, "key", None)
                 mock_create.reset_mock()
+                mock_organize.reset_mock()
         mock_process.assert_not_called()
         self.assertEqual(mock_dotenv.call_count, len(scenarios))
 
