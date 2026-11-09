@@ -358,12 +358,75 @@ class TvshowCreationTests(TempDirTestCase):
         mock_login.assert_called_once()
 
     @patch("kodi_nfo_fiddler.load_dotenv")
+    @patch("kodi_nfo_fiddler.process_directory")
     @patch("kodi_nfo_fiddler.create_tvshow_nfos")
     @patch.dict(os.environ, {"TVDB_API_KEY": "key"}, clear=True)
-    def test_create_tvshow_cli_does_not_require_tmdb_token(self, mock_create, mock_dotenv):
-        with patch("sys.argv", ["kodi_nfo_fiddler.py", "--create-tvshow-nfo", self.test_dir]):
+    def test_tvshow_mode_for_target_or_working_directory(self, mock_create, mock_process, mock_dotenv):
+        tv_dir = os.path.join(self.test_dir, "TV-Shows")
+        os.mkdir(tv_dir)
+        scenarios = (
+            (self.test_dir, ["kodi_nfo_fiddler.py", tv_dir], tv_dir),
+            (tv_dir, ["kodi_nfo_fiddler.py"], tv_dir),
+            (tv_dir, ["kodi_nfo_fiddler.py", self.test_dir], self.test_dir),
+        )
+        for cwd, argv, target in scenarios:
+            with self.subTest(cwd=cwd, argv=argv), \
+                    patch("os.getcwd", return_value=cwd), patch("sys.argv", argv):
+                main()
+                mock_create.assert_called_once_with(target, "key", None)
+                mock_create.reset_mock()
+        mock_process.assert_not_called()
+        self.assertEqual(mock_dotenv.call_count, len(scenarios))
+
+    @patch("kodi_nfo_fiddler.load_dotenv")
+    @patch("kodi_nfo_fiddler.process_directory")
+    @patch("kodi_nfo_fiddler.create_tvshow_nfos")
+    @patch.dict(os.environ, {"TMDB_READ_TOKEN": "token"}, clear=True)
+    def test_other_directories_use_movie_mode(self, mock_create, mock_process, mock_dotenv):
+        with patch("os.getcwd", return_value=self.test_dir), \
+                patch("sys.argv", ["kodi_nfo_fiddler.py", self.test_dir]):
             main()
-        mock_create.assert_called_once_with(self.test_dir, "key", None)
+        mock_process.assert_called_once_with(self.test_dir, is_root=True)
+        mock_create.assert_not_called()
+        mock_dotenv.assert_called_once()
+
+    @patch("kodi_nfo_fiddler.load_dotenv")
+    @patch("kodi_nfo_fiddler.process_directory")
+    @patch.dict(os.environ, {"TMDB_READ_TOKEN": "token"}, clear=True)
+    def test_movie_mode_processes_target_and_subdirectories(self, mock_process, mock_dotenv):
+        movies_dir = os.path.join(self.test_dir, "Movies")
+        os.mkdir(movies_dir)
+        subdir = os.path.join(movies_dir, "Film")
+        os.mkdir(subdir)
+        scenarios = (
+            (self.test_dir, ["kodi_nfo_fiddler.py", movies_dir], movies_dir, [subdir]),
+            (movies_dir, ["kodi_nfo_fiddler.py"], movies_dir, [subdir]),
+            (movies_dir, ["kodi_nfo_fiddler.py", subdir], subdir, []),
+        )
+        for cwd, argv, target, subdirs in scenarios:
+            with self.subTest(cwd=cwd, argv=argv), \
+                    patch("os.getcwd", return_value=cwd), patch("sys.argv", argv):
+                main()
+                self.assertEqual(mock_process.call_args_list[0].args, (target,))
+                self.assertEqual(mock_process.call_args_list[0].kwargs, {"is_root": True})
+                self.assertEqual(
+                    [call.args[0] for call in mock_process.call_args_list[1:]], subdirs
+                )
+                for call in mock_process.call_args_list[1:]:
+                    self.assertEqual(call.kwargs, {"is_root": False})
+                mock_process.reset_mock()
+        self.assertEqual(mock_dotenv.call_count, len(scenarios))
+
+    @patch("kodi_nfo_fiddler.load_dotenv")
+    @patch("kodi_nfo_fiddler.create_tvshow_nfos")
+    @patch.dict(os.environ, {}, clear=True)
+    def test_tvshow_mode_requires_tvdb_key(self, mock_create, mock_dotenv):
+        tv_dir = os.path.join(self.test_dir, "TV-Shows")
+        os.mkdir(tv_dir)
+        with patch("sys.argv", ["kodi_nfo_fiddler.py", tv_dir]), self.assertRaises(SystemExit) as error:
+            main()
+        self.assertEqual(error.exception.code, 1)
+        mock_create.assert_not_called()
         mock_dotenv.assert_called_once()
 
 
@@ -907,7 +970,7 @@ class ProcessDirectoryTests(TempDirTestCase):
     def test_process_directory_skips_non_mkv_media(self, mock_tmdb):
         video_path = os.path.join(self.test_dir, "inception.avi")
         txt_path = os.path.join(self.test_dir, "notes.txt")
-        sample_path = os.path.join(self.test_dir, "Sample Trailer.mp4")
+        sample_path = os.path.join(self.test_dir, "Sample Trailer.avi")
         for path in (video_path, txt_path, sample_path):
             _write(path, "test")
 
@@ -922,13 +985,14 @@ class ProcessDirectoryTests(TempDirTestCase):
 
     @patch("kodi_nfo_fiddler.search_tmdb")
     @patch("kodi_nfo_fiddler.remux_mp4_to_mkv")
-    def test_process_directory_does_not_remux_mp4_without_flag(self, mock_remux, mock_tmdb):
+    def test_process_directory_attempts_remux_and_preserves_input_on_failure(self, mock_remux, mock_tmdb):
         video_path = os.path.join(self.test_dir, "inception.BluRay.mp4")
         _write(video_path, "test")
+        mock_remux.return_value = None
 
         process_directory(self.test_dir, is_root=True)
 
-        mock_remux.assert_not_called()
+        mock_remux.assert_called_once_with(video_path)
         mock_tmdb.assert_not_called()
         self.assertTrue(os.path.exists(video_path))
 
@@ -949,7 +1013,7 @@ class ProcessDirectoryTests(TempDirTestCase):
 
         mock_run.side_effect = create_output
 
-        process_directory(self.test_dir, is_root=True, remux_mp4=True)
+        process_directory(self.test_dir, is_root=True)
 
         self.assertFalse(os.path.exists(video_path))
         self.assertFalse(os.path.exists(subtitle_path))

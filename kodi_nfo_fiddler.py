@@ -491,13 +491,13 @@ def clean_directory(directory_path, is_root):
     if not is_root:
         remove_smaller_video_files(directory_path)
 
-def prepare_mkv(directory_path, filename, remux_mp4):
+def prepare_mkv(directory_path, filename):
     """
-    Returns (file_path, mkv_filename) for a video, remuxing an MP4 first if allowed.
+    Returns (file_path, mkv_filename) for a video, remuxing an MP4 first.
     Returns None when the file should be skipped.
     """
     file_path = os.path.join(directory_path, filename)
-    if remux_mp4 and filename.lower().endswith('.mp4'):
+    if filename.lower().endswith('.mp4'):
         file_path = remux_mp4_to_mkv(file_path)
         if file_path is None:
             return None
@@ -548,7 +548,7 @@ def rename_directory(directory_path, new_name):
             print_warning(f"Directory rename failed: {e}")
     return directory_path
 
-def process_directory(directory_path, is_root=False, remux_mp4=False):
+def process_directory(directory_path, is_root=False):
     directory_path = os.path.abspath(directory_path)
     original_directory = os.path.basename(directory_path)
     stored_directory = None
@@ -582,7 +582,7 @@ def process_directory(directory_path, is_root=False, remux_mp4=False):
     print(f"\nScanning folder: '{os.path.basename(directory_path)}' (Contains {len(video_files)} video file(s))")
 
     for original_filename in video_files:
-        prepared = prepare_mkv(directory_path, original_filename, remux_mp4)
+        prepared = prepare_mkv(directory_path, original_filename)
         if prepared is None:
             continue
         file_path, filename = prepared
@@ -1060,16 +1060,6 @@ def main():
 
     parser = argparse.ArgumentParser(description="Organize movie files and write Kodi NFO files.")
     parser.add_argument("directory", nargs="?", default=".", help="directory to process (default: current directory)")
-    parser.add_argument(
-        "--remux-mp4",
-        action="store_true",
-        help="remux MP4 files (plus English/Swedish sidecar subtitles) into MKV and remove the MP4",
-    )
-    parser.add_argument(
-        "--create-tvshow-nfo",
-        action="store_true",
-        help="recursively create missing tvshow.nfo files using episode filenames and TVDB, then exit",
-    )
     args = parser.parse_args()
     target_dir = args.directory
 
@@ -1080,7 +1070,7 @@ def main():
     target_dir = os.path.abspath(target_dir)
     print(f"Scanning directory: {target_dir}")
 
-    if args.create_tvshow_nfo:
+    if os.path.basename(os.getcwd()) == "TV-Shows" or os.path.basename(target_dir) == "TV-Shows":
         api_key = os.getenv("TVDB_API_KEY")
         if not api_key:
             print("Error: TVDB_API_KEY not found. Check your .env file.")
@@ -1105,11 +1095,11 @@ def main():
         existing_subdirs = []
 
     # Process loose video files sitting directly in the root directory (creates subdirs)
-    process_directory(target_dir, is_root=True, remux_mp4=args.remux_mp4)
+    process_directory(target_dir, is_root=True)
 
     # Process nested files in existing subdirectories (renames the subdirs)
     for subdir in existing_subdirs:
-        process_directory(subdir, is_root=False, remux_mp4=args.remux_mp4)
+        process_directory(subdir, is_root=False)
 
 if __name__ == "__main__":
     main()

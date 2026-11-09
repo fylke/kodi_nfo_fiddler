@@ -53,29 +53,29 @@ For example `Inception_(2010)_(1080p_BluRay_DTS-HD_7.1_Atmos)`. When the source 
 - **Name collisions:** an existing file or folder with the target name is never overwritten; the item is skipped with a warning.
 - **Cleanup:** after a video is successfully organized, `.txt` and `.jpg` files, `Featurettes` folders and entries starting with `sample` are removed from its folder. Folders skipped as ambiguous or lacking required metadata are left untouched.
 - **Subtitles:** an MKV without an English subtitle track gets English subtitle files added with `mkvmerge` (the file is rewritten in place and the subtitle files are removed afterwards). For a loose video in the target directory only files named after the video count (`Movie.en.srt`); for a video in an existing folder any subtitle file in that folder ending in `en`, `eng` or `english` counts (`name.en.srt`). If the muxing fails, the files are left untouched with a warning. Without any English subtitles a warning is printed.
-- **Non-MKV videos:** skipped unless you use `--remux-mp4` (below).
+- **Non-MKV videos:** MP4 files are remuxed into MKV (below); other formats are skipped.
 
 Warnings are printed in yellow in interactive terminals. Color is disabled when output is redirected or when `NO_COLOR` is set.
 
 ## Creating TV show NFO files
 
-Create missing `tvshow.nfo` files with `--create-tvshow-nfo`. Run it on a directory containing multiple show folders; it visits each folder recursively and creates an NFO for each matching show. It runs on its own and does not organize or remux videos or upgrade existing NFOs:
+The script creates missing `tvshow.nfo` files when the current working directory or the selected target directory is named exactly `TV-Shows`. It visits the target directory recursively and creates an NFO for each matching show. In this mode it does not organize or remux videos or upgrade existing NFOs:
 
 ```bash
-python3 kodi_nfo_fiddler.py --create-tvshow-nfo /path/to/shows
+python3 kodi_nfo_fiddler.py /path/to/TV-Shows
 ```
 
 For each show directory, episode filenames must start with the show name followed by `_-_S01E01`, for example `Breaking_Bad_-_S01E01.mkv`. The name before that marker is searched on TVDB with underscores replaced by spaces; the first series result supplies the title, year and default TVDB ID. The NFO is created alongside the episodes. An existing `tvshow.nfo` is never changed, directories containing multiple show names are skipped, and no NFO is created if TVDB finds no match.
 
 ## Remuxing MP4 files
 
-Remux MP4 files into MKV with `--remux-mp4` (without it, MP4 files are skipped):
+When processing movies, MP4 files are always remuxed into MKV. For example:
 
 ```bash
-python3 kodi_nfo_fiddler.py --remux-mp4 /path/to/movies
+python3 kodi_nfo_fiddler.py /path/to/movies
 ```
 
-With the flag, MP4 files are remuxed into MKV containers without re-encoding. Matching sidecar subtitles whose filenames contain an English (`en`, `eng`, `english`) or Swedish (`sv`, `swe`, `swedish`, `svenska`) language tag are included; English tracks are ordered first and set as the default when present. The source MP4 and the subtitle sidecars that were included are removed only after a successful conversion; mkvmerge warnings (exit code 1) still count as success.
+MP4 files are remuxed into MKV containers without re-encoding. Matching sidecar subtitles whose filenames contain an English (`en`, `eng`, `english`) or Swedish (`sv`, `swe`, `swedish`, `svenska`) language tag are included; English tracks are ordered first and set as the default when present. The source MP4 and the subtitle sidecars that were included are removed only after a successful conversion; mkvmerge warnings (exit code 1) still count as success.
 
 ## Dev container
 
