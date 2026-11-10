@@ -23,7 +23,6 @@ from dotenv import load_dotenv
 TMDB_READ_TOKEN = None
 
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
-TVDB_API_BASE_URL = "https://api4.thetvdb.com/v4"
 TMDB_HOST = "themoviedb.org"
 TMDB_MOVIE_BASE_URL = f"https://www.{TMDB_HOST}/movie/"
 IMDB_ID_PATTERN = re.compile(r"\b(tt\d{7,})\b", re.IGNORECASE)
@@ -34,6 +33,7 @@ MEDIA_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.m4v', '.mov', '.flv', '.wmv')
 REMOVE_EXTENSIONS = ('.txt', '.jpg')
 # Each normalized source tag with the spellings that map to it, checked in order.
 SOURCES = [
+    ("LaserDisc", ("Laserdisc",)),
     ("BluRay", ("BluRay", "Blu-Ray", "Blu Ray", "BDRemux", "BRRip", "BDRip", "BR")),
     ("WEBRip", ("WEB-DL", "WEBDL", "WEBRip", "HDRip", "WEB", "HDTV", "PDTV")),
     ("DVD", ("DVDRip", "DVDR", "DVD")),
@@ -48,7 +48,18 @@ TITLE_CUTOFF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DIRECTORS_CUT_PATTERN = re.compile(r"\bdirector'?s[\s-]+cut\b", re.IGNORECASE)
-TV_EPISODE_PATTERN = re.compile(r"^(.+?)_-_S(\d{2})E(\d{2})(?![\dEe]|[-_. ]+E\d)", re.IGNORECASE)
+# Group 1 is everything before SxxExx (possibly empty), so a show name may come from the folder instead.
+TV_EPISODE_PATTERN = re.compile(
+    r"^(.*?)[\s._-]*(?<![A-Za-z0-9])S(\d{2})E(\d{2})(?!\d)", re.IGNORECASE
+)
+# Continuations after SxxExx: E02 or -02 (list item), -E04 or -S01E04 (inclusive range).
+TV_EXTRA_EPISODE_PATTERN = re.compile(
+    r"(?:(?P<dash>[-_. ]*-[-_. ]*)(?:S(?P<season>\d{2}))?(?P<e>E)?|(?P<e2>E))"
+    r"(?P<num>\d{2})(?:(?![\dA-Za-z])|(?=E\d{2}))",
+    re.IGNORECASE,
+)
+TV_YEAR_PATTERN = re.compile(r"[\[(]\s*((?:19|20)\d{2})\s*[\])]|\s((?:19|20)\d{2})\s*$")
+TV_FOLDER_SEASON_PATTERN = re.compile(r"\s+(?:S\d{1,2}|Season\s*\d+)\b.*$", re.IGNORECASE)
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 SUBTITLE_LANGUAGES = {
     "en": ("en", "eng", "english"),
@@ -816,13 +827,13 @@ def write_kodi_nfo(path, title, year, tmdb_id=None, imdb_id=None, original_filen
     write_nfo_xml(path, "movie", fields)
 
 def write_kodi_tvshow_nfo(path, show):
-    """Writes a Kodi tvshow NFO. TVDB is the default id (Kodi's default TV scraper) when known."""
+    """Writes a Kodi tvshow NFO with the TMDB id as the default when known."""
     fields = []
     if show.get("title"):
         fields.append(("title", show["title"], {}))
     if show.get("year"):
         fields.append(("year", show["year"], {}))
-    id_keys = (("tvdb", "tvdb_id"), ("tmdb", "tmdb_id"), ("imdb", "imdb_id"))
+    id_keys = (("tmdb", "tmdb_id"), ("tvdb", "tvdb_id"), ("imdb", "imdb_id"))
     unique_ids = [(id_type, show[key]) for id_type, key in id_keys if show.get(key)]
     for index, (id_type, value) in enumerate(unique_ids):
         attributes = {"type": id_type, **({"default": "true"} if index == 0 else {})}
@@ -955,35 +966,51 @@ def upgrade_nfo_files(directory):
 # TV show NFO creation
 # ---------------------------------------------------------------------------
 
-def tvdb_login(api_key, pin=None):
-    """Authenticate with TVDB and return a bearer token."""
-    credentials = {"apikey": api_key}
-    if pin:
-        credentials["pin"] = pin
-    response = requests.post(f"{TVDB_API_BASE_URL}/login", json=credentials, timeout=30)
-    response.raise_for_status()
-    token = response.json()["data"]["token"]
-    if not isinstance(token, str) or not token:
-        raise ValueError("TVDB login returned an invalid token")
-    return token
+def parse_tv_episode_numbers(filename, match):
+    """Return the sorted episode numbers named in an episode filename (S01E01E02, S01E01-E04, S01E01-02)."""
+    season = int(match.group(2))
+    numbers = [int(match.group(3))]
+    position = match.end()
+    while extra := TV_EXTRA_EPISODE_PATTERN.match(filename, position):
+        if extra.group("season") and int(extra.group("season")) != season:
+            break
+        number = int(extra.group("num"))
+        if extra.group("dash") and extra.group("e") and number > numbers[-1]:
+            numbers.extend(range(numbers[-1] + 1, number + 1))
+        elif number > numbers[-1]:
+            numbers.append(number)
+        else:
+            break
+        position = extra.end()
+    return numbers
 
-def tvdb_search_results(title, token):
-    """Return TVDB series search results."""
-    response = requests.get(
-        f"{TVDB_API_BASE_URL}/search",
-        headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
-        params={"query": title, "type": "series"},
-        timeout=30,
-    )
-    response.raise_for_status()
-    results = response.json()["data"]
+def parse_tv_show_name(text, is_folder=False):
+    """Returns (title, year) from a show name, dropping a bracketed or trailing year; year may be None."""
+    text = re.sub(r"\s+", " ", text.replace("_", " ").replace(".", " "))
+    if is_folder:
+        text = TV_FOLDER_SEASON_PATTERN.sub("", text)
+    year = None
+    match = TV_YEAR_PATTERN.search(text)
+    if match:
+        year = match.group(1) or match.group(2)
+        text = text[:match.start()] + " " + text[match.end():]
+    return re.sub(r"\s+", " ", text).strip(" -"), year
+
+def search_tmdb_tv_results(title, year=None):
+    """Return TMDB TV search results, narrowed to the first-air year when known (falling back to all years)."""
+    params = {"query": title}
+    results = []
+    if year:
+        results = tmdb_get("/search/tv", {**params, "first_air_date_year": year}).get("results", [])
+    if not results:
+        results = tmdb_get("/search/tv", params).get("results", [])
     if not isinstance(results, list):
-        raise ValueError("TVDB search returned an invalid result list")
+        raise ValueError("TMDB TV search returned an invalid result list")
     return results
 
-def search_tvdb_series(title, token):
-    """Return an unambiguous TVDB series match, or None when no series matches."""
-    results = tvdb_search_results(title, token)
+def search_tmdb_tv(title, year=None):
+    """Return an unambiguous TMDB TV match, or None when no series matches."""
+    results = search_tmdb_tv_results(title, year)
     if not results:
         return None
     exact_matches = [
@@ -991,15 +1018,19 @@ def search_tvdb_series(title, token):
         if isinstance(item.get("name"), str) and item["name"].casefold() == title.casefold()
     ]
     if len(exact_matches) > 1:
-        raise ValueError(f"Multiple TVDB series are named '{title}'; skipping ambiguous show")
+        raise ValueError(f"Multiple TMDB series are named '{title}'; skipping ambiguous show")
     if not exact_matches and len(results) > 1:
-        raise ValueError(f"Multiple TVDB series match '{title}'; skipping ambiguous show")
+        raise ValueError(f"Multiple TMDB series match '{title}'; skipping ambiguous show")
     result = exact_matches[0] if exact_matches else results[0]
-    tvdb_id = str(result["tvdb_id"])
+    tmdb_id = str(result["id"])
     name = result["name"]
-    if not tvdb_id.isdigit() or not isinstance(name, str) or not name.strip():
-        raise ValueError("TVDB search returned a series without a valid id and name")
-    return {"title": name, "year": result.get("year"), "tvdb_id": tvdb_id}
+    if not tmdb_id.isdigit() or not isinstance(name, str) or not name.strip():
+        raise ValueError("TMDB TV search returned a series without a valid id and name")
+    return {
+        "title": name,
+        "year": (result.get("first_air_date") or "")[:4],
+        "tmdb_id": tmdb_id,
+    }
 
 def create_tvshow_nfo(directory, show):
     """Create tvshow.nfo without overwriting an existing file or leaving a partial NFO."""
@@ -1012,10 +1043,9 @@ def create_tvshow_nfo(directory, show):
     finally:
         os.remove(staged_path)
 
-def create_tvshow_nfos(directory, api_key, pin=None):
-    """Create a TVDB-backed NFO in each directory with matching episode filenames."""
+def create_tvshow_nfos(directory):
+    """Create a TMDB-backed NFO in each directory with matching episode filenames."""
     counts = {"created": 0, "skipped": 0, "failed": 0}
-    token = None
 
     def report_walk_error(error):
         counts["failed"] += 1
@@ -1025,27 +1055,33 @@ def create_tvshow_nfos(directory, api_key, pin=None):
         if any(filename.lower() == "tvshow.nfo" for filename in filenames):
             continue
         titles = {}
+        unmatched = []
         for filename in sorted(filenames):
             if not filename.lower().endswith(MEDIA_EXTENSIONS):
                 continue
             match = TV_EPISODE_PATTERN.match(filename)
-            if match:
-                title = match.group(1).replace("_", " ").strip()
-                if title:
-                    titles[title.casefold()] = title
+            if not match:
+                unmatched.append(filename)
+                continue
+            title, year = parse_tv_show_name(match.group(1))
+            if not title:
+                title, folder_year = parse_tv_show_name(os.path.basename(current_dir), is_folder=True)
+                year = year or folder_year
+            if title:
+                titles[(title.casefold(), year)] = (title, year)
+        for filename in unmatched:
+            print_warning(f"'{filename}' in '{current_dir}' does not look like an episode (expected SxxExx); skipping.")
         if not titles:
             continue
         if len(titles) != 1:
             print_warning(f"Multiple show names found in '{current_dir}'; skipping directory.")
             counts["skipped"] += 1
             continue
-        title = next(iter(titles.values()))
+        title, year = next(iter(titles.values()))
         try:
-            if token is None:
-                token = tvdb_login(api_key, pin)
-            show = search_tvdb_series(title, token)
+            show = search_tmdb_tv(title, year)
             if show is None:
-                print_warning(f"No TVDB series found for '{title}' in '{current_dir}'.")
+                print_warning(f"No TMDB series found for '{title}' in '{current_dir}'.")
                 counts["failed"] += 1
                 continue
             create_tvshow_nfo(current_dir, show)
@@ -1058,7 +1094,7 @@ def create_tvshow_nfos(directory, api_key, pin=None):
             counts["failed"] += 1
             continue
         counts["created"] += 1
-        print(f"[+] Created TV show NFO: {os.path.join(current_dir, 'tvshow.nfo')} (TVDB {show['tvdb_id']})")
+        print(f"[+] Created TV show NFO: {os.path.join(current_dir, 'tvshow.nfo')} (TMDB {show['tmdb_id']})")
 
     print(
         f"TV show NFO creation complete: {counts['created']} created, "
@@ -1067,24 +1103,18 @@ def create_tvshow_nfos(directory, api_key, pin=None):
     return counts
 
 
-def tvdb_get(path, token, params=None):
-    """Fetch a TVDB API response."""
-    response = requests.get(
-        f"{TVDB_API_BASE_URL}{path}",
-        headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
-        params=params,
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()["data"]
-
-def read_tvdb_nfo_id(path):
-    """Read an existing TVDB series ID without modifying the NFO."""
+def read_tmdb_tv_id(path):
+    """Read a TMDB series ID, resolving a legacy TVDB ID when necessary."""
     root = ET.parse(path).getroot()
-    value = root.findtext("uniqueid[@type='tvdb']") or root.findtext("tvdbid")
-    if not value or not value.strip().isdigit():
-        raise ValueError(f"No valid TVDB ID in '{path}'")
-    return value.strip()
+    value = root.findtext("uniqueid[@type='tmdb']") or root.findtext("tmdbid")
+    if value and value.strip().isdigit():
+        return value.strip()
+    tvdb_id = root.findtext("uniqueid[@type='tvdb']") or root.findtext("tvdbid")
+    if tvdb_id and tvdb_id.strip().isdigit():
+        tmdb_id = lookup_tmdb_tv_by_external_id(tvdb_id.strip(), "tvdb_id")
+        if tmdb_id:
+            return str(tmdb_id)
+    raise ValueError(f"No valid TMDB series ID in '{path}'")
 
 def episode_sidecars(path):
     """Find files named after an episode, excluding other video files."""
@@ -1130,9 +1160,8 @@ def rename_episode_files(video, destination, sidecars, replace_source=None):
         except OSError as error:
             print_warning(f"Could not remove original '{source}' after rename: {error}")
 
-def organize_tv_episodes(directory, api_key, pin=None):
-    """Rename TV episodes using their existing TVDB show IDs."""
-    token = None
+def organize_tv_episodes(directory):
+    """Rename TV episodes using their existing TMDB show IDs."""
     def report_walk_error(error):
         print_warning(f"Could not scan directory: {error}")
 
@@ -1152,42 +1181,40 @@ def organize_tv_episodes(directory, api_key, pin=None):
         staged = None
         try:
             original_source = detect_source(os.path.basename(current_dir))
-            show_id = read_tvdb_nfo_id(os.path.join(current_dir, nfos[0]))
-            if token is None:
-                token = tvdb_login(api_key, pin)
-            show = tvdb_get(f"/series/{show_id}", token)
+            show_id = read_tmdb_tv_id(os.path.join(current_dir, nfos[0]))
+            show = tmdb_get(f"/tv/{show_id}")
             title = show["name"]
             if not isinstance(title, str) or not title.strip():
-                raise ValueError("TVDB series has no title")
-            candidates = tvdb_search_results(title, token)
+                raise ValueError("TMDB series has no title")
+            candidates = search_tmdb_tv_results(title)
             same_name_ids = {
-                str(item["tvdb_id"]) for item in candidates
+                str(item["id"]) for item in candidates
                 if isinstance(item.get("name"), str) and item["name"].casefold() == title.casefold()
             }
+            new_dir = sanitize_folder_name(title)
             if len(same_name_ids) > 1:
-                year = (show.get("firstAired") or "")[:4]
+                year = (show.get("first_air_date") or "")[:4]
                 if not year.isdigit() or len(year) != 4:
                     raise ValueError(f"No release year for ambiguous series '{title}'")
-                new_dir = f"{sanitize_folder_name(title)}_({year})"
-                if os.path.basename(current_dir) != "TV-Shows":
-                    current_dir = rename_directory(current_dir, new_dir)
+                new_dir += f"_({year})"
+            if os.path.basename(current_dir) != "TV-Shows":
+                current_dir = rename_directory(current_dir, new_dir)
             for filename, match in episodes:
                 source = os.path.join(current_dir, filename)
                 if not filename.lower().endswith((".mkv", ".mp4")):
                     print_warning(f"Skipping unsupported episode format: '{source}'.")
                     continue
                 try:
-                    season, number = int(match.group(2)), int(match.group(3))
-                    data = tvdb_get(
-                        f"/series/{show_id}/episodes/official", token,
-                        {"page": 0, "season": season, "episodeNumber": number},
-                    )
-                    hits = [
-                        episode for episode in data["episodes"]
-                        if episode.get("seasonNumber") == season and episode.get("number") == number
-                    ]
-                    if len(hits) != 1 or not hits[0].get("name"):
-                        print_warning(f"No unique TVDB episode title for '{source}'; skipping.")
+                    season = int(match.group(2))
+                    numbers = parse_tv_episode_numbers(filename, match)
+                    episode_names = []
+                    for number in numbers:
+                        episode = tmdb_get(f"/tv/{show_id}/season/{season}/episode/{number}")
+                        if not episode.get("name"):
+                            break
+                        episode_names.append(episode["name"])
+                    if len(episode_names) != len(numbers):
+                        print_warning(f"No TMDB episode title for '{source}'; skipping.")
                         continue
                     sidecars = episode_sidecars(source)
                     subtitles = find_sidecar_subtitles(source)
@@ -1215,11 +1242,12 @@ def organize_tv_episodes(directory, api_key, pin=None):
                     if unknown:
                         print_warning(f"Unknown {', '.join(unknown)} for '{source}'; skipping.")
                         continue
-                    episode_name = sanitize_folder_name(hits[0]["name"])
-                    if not episode_name:
+                    episode_name = "_-_".join(sanitize_folder_name(name) for name in episode_names)
+                    if not episode_name or any(not sanitize_folder_name(name) for name in episode_names):
                         raise ValueError(f"Invalid episode title for '{source}'")
+                    numbering = "".join(f"E{number:02d}" for number in numbers)
                     stem = (
-                        f"{sanitize_folder_name(title)}_-_S{season:02d}E{number:02d}_-_"
+                        f"{sanitize_folder_name(title)}_-_S{season:02d}{numbering}_-_"
                         f"{episode_name}_{build_metadata_suffix(metadata)}"
                     )
                     destination = os.path.join(current_dir, f"{stem}.mkv")
@@ -1263,19 +1291,15 @@ def main():
     target_dir = os.path.abspath(target_dir)
     print(f"Scanning directory: {target_dir}")
 
-    if os.path.basename(os.getcwd()) == "TV-Shows" or os.path.basename(target_dir) == "TV-Shows":
-        api_key = os.getenv("TVDB_API_KEY")
-        if not api_key:
-            print("Error: TVDB_API_KEY not found. Check your .env file.")
-            sys.exit(1)
-        create_tvshow_nfos(target_dir, api_key, os.getenv("TVDB_PIN"))
-        organize_tv_episodes(target_dir, api_key, os.getenv("TVDB_PIN"))
-        return
-
     TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
     if not TMDB_READ_TOKEN:
         print("Error: TMDB_READ_TOKEN not found. Check your .env file.")
         sys.exit(1)
+
+    if os.path.basename(os.getcwd()) == "TV-Shows" or os.path.basename(target_dir) == "TV-Shows":
+        create_tvshow_nfos(target_dir)
+        organize_tv_episodes(target_dir)
+        return
 
     # Snapshot the pre-existing subdirectories BEFORE processing loose files
     try:
